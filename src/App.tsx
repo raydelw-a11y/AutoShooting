@@ -38,7 +38,7 @@ import { soundEngine } from './utils/soundEngine';
 
 declare const __BUILD_TIMESTAMP__: string | undefined;
 
-const FALLBACK_TIMESTAMP = '07:40 PM - 11/08/2026';
+const FALLBACK_TIMESTAMP = '07:51 PM - 11/08/2026';
 
 interface UpgradeOption {
   kind: 'weapon' | 'passive';

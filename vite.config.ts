@@ -20,6 +20,9 @@ export default defineConfig(() => {
 
   return {
     plugins: [react(), tailwindcss()],
+    server: {
+      allowedHosts: true,
+    },
     define: {
       __BUILD_TIMESTAMP__: JSON.stringify(`${buildTime} - ${buildDate}`),
     },

@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100dvh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #090d16;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+.font-survivor {
+  font-family: 'Lilita One', 'Fredoka', 'Inter', sans-serif;
+  letter-spacing: 0.03em;
+}
+
+.text-stroke-sm {
+  text-shadow:
+    -1.5px -1.5px 0 #000,
+    1.5px -1.5px 0 #000,
+    -1.5px 1.5px 0 #000,
+    1.5px 1.5px 0 #000,
+    0px 2px 0 #000;
+}
+
+.text-stroke-md {
+  text-shadow:
+    -2px -2px 0 #000,
+    2px -2px 0 #000,
+    -2px 2px 0 #000,
+    2px 2px 0 #000,
+    0px -2px 0 #000,
+    0px 3px 0 #000,
+    -2px 0px 0 #000,
+    2px 0px 0 #000;
+}
+
+.text-stroke-lg {
+  text-shadow:
+    -3px -3px 0 #000,
+    3px -3px 0 #000,
+    -3px 3px 0 #000,
+    3px 3px 0 #000,
+    0px -3px 0 #000,
+    0px 4px 0 #000,
+    -3px 0px 0 #000,
+    3px 0px 0 #000;
+}
+
+.survivor-box {
+  border: 3px solid #111827;
+  box-shadow: 0 4px 0 #000000;
+}
+
+.survivor-btn {
+  border: 3px solid #000000;
+  box-shadow: 0 4px 0 #000000, inset 0 2px 0 rgba(255, 255, 255, 0.35);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+.survivor-btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 #000000, inset 0 2px 0 rgba(255, 255, 255, 0.25);
+}

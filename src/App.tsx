@@ -38,7 +38,7 @@ import { soundEngine } from './utils/soundEngine';
 
 declare const __BUILD_TIMESTAMP__: string | undefined;
 
-const FALLBACK_TIMESTAMP = '08:23 PM - 11/08/2026';
+const FALLBACK_TIMESTAMP = '08:26 PM - 11/08/2026';
 
 interface UpgradeOption {
   kind: 'weapon' | 'passive';
@@ -902,6 +902,19 @@ export default function App() {
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playLevelUp();
+                      setPendingLevelUps(0);
+                      setSaveData(getDefaultSaveData());
+                    }}
+                    className="px-2 py-1.5 rounded-xl bg-slate-700 text-slate-200 font-survivor text-[11px] survivor-btn cursor-pointer flex items-center gap-1"
+                    title="Reiniciar personaje a Nivel 1"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Nv.1</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {

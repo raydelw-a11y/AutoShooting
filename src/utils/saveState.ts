@@ -124,7 +124,7 @@ export function saveGameData(data: PersistentSaveData): void {
 }
 
 export function getXpRequiredForLevel(level: number): number {
-  return Math.floor(45 + Math.pow(level, 1.45) * 28);
+  return Math.floor(180 + (level - 1) * 95 + Math.pow(level, 1.85) * 65);
 }
 
 export function formatWeaponTierLabel(level: number): {

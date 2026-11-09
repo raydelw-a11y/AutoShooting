@@ -305,7 +305,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         type: 'xp_green',
         x: centerX + ox,
         y: centerY + oy,
-        value: Math.round(14 * world.xpMultiplier),
+        value: Math.max(4, Math.round(5 * Math.sqrt(world.xpMultiplier))),
         magnetized: false,
         bobPhase: Math.random() * Math.PI * 2,
       });
@@ -508,7 +508,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const areaMult = 1 + bracerLv * 0.14 + fuelLv * 0.16;
       const projSpeedMult = 1 + thrusterLv * 0.18;
       const magnetRadius = 92 * magnetShopMult * (1 + (sneakersLv + magnetCoreLv) * 0.35);
-      const xpMult = greedMult * (1 + scrollLv * 0.18);
+      const xpMult = 1 + (s.permanentUpgrades.greed - 1) * 0.08 + scrollLv * 0.08;
       const goldMult = greedMult * (1 + goldLv * 0.25);
       const regenPerSec = maxHp * (0.008 + drinkLv * 0.015);
       const damageReduction = Math.min(0.65, armorLv * 0.1);
@@ -1581,7 +1581,8 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             radius: e.radius,
           });
 
-          const lootLevelScale = 1 + (lvl - 1) * 0.25;
+          const lootGoldScale = 1 + (lvl - 1) * 0.15;
+          const lootXpScale = Math.sqrt(world.xpMultiplier) * (1 + (lvl - 1) * 0.05);
           if (e.isBoss) {
             bossesDefeatedThisFrame += 1;
             dropsRef.current.push({
@@ -1600,13 +1601,16 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 type: c % 2 === 0 ? 'coin' : 'xp_gold',
                 x: e.x + Math.cos(ang) * 45,
                 y: e.y + Math.sin(ang) * 45,
-                value: Math.round(65 * world.goldMultiplier * lootLevelScale),
+                value:
+                  c % 2 === 0
+                    ? Math.round(45 * world.goldMultiplier * lootGoldScale)
+                    : Math.round(28 * lootXpScale),
                 magnetized: true,
                 bobPhase: c,
               });
             }
           } else if (e.isElite) {
-            if (Math.random() < 0.55) {
+            if (Math.random() < 0.45) {
               dropsRef.current.push({
                 id: nextEntityIdRef.current++,
                 type: 'chest_rainbow',
@@ -1622,13 +1626,13 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               type: 'xp_gold',
               x: e.x + 12,
               y: e.y,
-              value: Math.round(48 * world.xpMultiplier * lootLevelScale),
+              value: Math.round(26 * lootXpScale),
               magnetized: false,
               bobPhase: 0,
             });
           } else {
             const roll = Math.random();
-            if (roll < 0.012) {
+            if (roll < 0.01) {
               dropsRef.current.push({
                 id: nextEntityIdRef.current++,
                 type: 'magnet',
@@ -1638,7 +1642,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 magnetized: false,
                 bobPhase: 0,
               });
-            } else if (roll < 0.024) {
+            } else if (roll < 0.022) {
               dropsRef.current.push({
                 id: nextEntityIdRef.current++,
                 type: 'meat',
@@ -1648,7 +1652,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 magnetized: false,
                 bobPhase: 0,
               });
-            } else if (roll < 0.032) {
+            } else if (roll < 0.028) {
               dropsRef.current.push({
                 id: nextEntityIdRef.current++,
                 type: 'bomb',
@@ -1664,17 +1668,17 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 type: 'coin',
                 x: e.x,
                 y: e.y,
-                value: Math.max(1, Math.round(6 * world.goldMultiplier * lootLevelScale)),
+                value: Math.max(1, Math.round(5 * world.goldMultiplier * lootGoldScale)),
                 magnetized: false,
                 bobPhase: 0,
               });
             } else {
               dropsRef.current.push({
                 id: nextEntityIdRef.current++,
-                type: roll < 0.38 ? 'xp_blue' : 'xp_green',
+                type: roll < 0.34 ? 'xp_blue' : 'xp_green',
                 x: e.x,
                 y: e.y,
-                value: Math.round((roll < 0.38 ? 28 : 14) * world.xpMultiplier * lootLevelScale),
+                value: Math.max(4, Math.round((roll < 0.34 ? 12 : 6) * lootXpScale)),
                 magnetized: false,
                 bobPhase: Math.random() * 6,
               });

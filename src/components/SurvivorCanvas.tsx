@@ -3636,10 +3636,14 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      if (!isPausedRef.current) {
-        updateSimulation(dt, rect.width, rect.height);
+      try {
+        if (!isPausedRef.current) {
+          updateSimulation(dt, rect.width, rect.height);
+        }
+        renderScene(rect.width, rect.height, now);
+      } catch {
+        // Prevenir que cualquier excepción de dibujo detenga el bucle 60 FPS
       }
-      renderScene(rect.width, rect.height, now);
 
       ctx.restore();
       animationFrameId = requestAnimationFrame(tick);

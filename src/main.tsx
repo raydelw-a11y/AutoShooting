@@ -36,11 +36,11 @@ if (
 
 class SafeBootBoundary extends React.Component<
   { children: React.ReactNode },
-  { hasError: boolean }
+  { hasError: boolean; retryKey: number }
 > {
   constructor(props: { children: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, retryKey: 0 };
   }
 
   static getDerivedStateFromError() {
@@ -55,6 +55,16 @@ class SafeBootBoundary extends React.Component<
     }
   }
 
+  handleRecoverNow = () => {
+    try {
+      localStorage.removeItem('survivor_io_openworld_save_v1');
+      sessionStorage.setItem('survivor_auth_ok', 'true');
+    } catch {
+      // ignore
+    }
+    this.setState((prev) => ({ hasError: false, retryKey: prev.retryKey + 1 }));
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -66,7 +76,7 @@ class SafeBootBoundary extends React.Component<
           </p>
           <button
             type="button"
-            onClick={() => window.location.reload()}
+            onClick={this.handleRecoverNow}
             className="px-6 py-3 rounded-2xl bg-emerald-500 text-white font-survivor text-lg survivor-btn cursor-pointer"
           >
             ENTRAR AL JUEGO AHORA
@@ -74,7 +84,7 @@ class SafeBootBoundary extends React.Component<
         </div>
       );
     }
-    return this.props.children;
+    return <React.Fragment key={this.state.retryKey}>{this.props.children}</React.Fragment>;
   }
 }
 

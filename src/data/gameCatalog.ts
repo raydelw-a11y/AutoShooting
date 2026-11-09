@@ -160,52 +160,60 @@ export interface PermanentUpgradeDef {
 
 export const SLOT_LABELS: Record<
   EquipSlotKey,
-  { title: string; shortLabel: string; category: ItemSlotCategory; icon: string }
+  { title: string; short: string; shortLabel: string; category: ItemSlotCategory; icon: string }
 > = {
   leftHand: {
     title: 'Mano Izquierda',
+    short: 'Mano Izq.',
     shortLabel: 'Mano Izq.',
     category: 'hand',
     icon: '🤚',
   },
   rightHand: {
     title: 'Mano Derecha',
+    short: 'Mano Der.',
     shortLabel: 'Mano Der.',
     category: 'hand',
     icon: '🖐️',
   },
   leftShoulder: {
     title: 'Hombro Izquierdo',
+    short: 'Hombro Izq.',
     shortLabel: 'Hombro Izq.',
     category: 'shoulder',
     icon: '🦾',
   },
   rightShoulder: {
     title: 'Hombro Derecho',
+    short: 'Hombro Der.',
     shortLabel: 'Hombro Der.',
     category: 'shoulder',
     icon: '🦿',
   },
   helmet: {
     title: 'Casco',
+    short: 'Casco',
     shortLabel: 'Casco',
     category: 'helmet',
     icon: '🪖',
   },
   body: {
     title: 'Armadura Cuerpo',
+    short: 'Cuerpo',
     shortLabel: 'Cuerpo',
     category: 'body',
     icon: '🛡️',
   },
   companion1: {
     title: 'Acompañante 1',
+    short: 'Acomp. 1',
     shortLabel: 'Acomp. 1',
     category: 'companion',
     icon: '🛸',
   },
   companion2: {
     title: 'Acompañante 2',
+    short: 'Acomp. 2',
     shortLabel: 'Acomp. 2',
     category: 'companion',
     icon: '🐾',

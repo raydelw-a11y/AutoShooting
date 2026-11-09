@@ -41,7 +41,7 @@ import { soundEngine } from './utils/soundEngine';
 
 declare const __BUILD_TIMESTAMP__: string | undefined;
 
-const FALLBACK_TIMESTAMP = '09:39 PM - 11/08/2026';
+const FALLBACK_TIMESTAMP = '09:46 PM - 11/08/2026';
 
 interface UpgradeOption {
   kind: 'weapon' | 'passive';
@@ -232,7 +232,7 @@ export default function App() {
         isEvoUnlock,
         isNewUnlock: currentLv === 0,
         categoryLabel: `${catMeta.icon} ${catMeta.shortLabel}${
-          equippedSlot ? ` · En ${SLOT_LABELS[equippedSlot].short}` : ''
+          equippedSlot ? ` · En ${SLOT_LABELS[equippedSlot].shortLabel}` : ''
         }`,
         title: isEvoAppearance ? def.evoName : def.name,
         subtitle: isEvoUnlock
@@ -796,7 +796,7 @@ export default function App() {
                     </span>
                   </div>
                   <span className="text-[8px] font-extrabold tracking-tighter text-amber-200 leading-tight truncate max-w-full">
-                    {def ? `Nv.${lv}` : slotMeta.short.split(' ')[0]}
+                    {def ? `Nv.${lv}` : (slotMeta.shortLabel || slotMeta.short || '').split(' ')[0]}
                   </span>
                 </button>
               );
@@ -1185,7 +1185,7 @@ export default function App() {
                       >
                         <div className="flex items-center justify-between gap-1">
                           <span className="text-[9px] font-extrabold text-slate-400 truncate">
-                            {slotMeta.short}
+                            {slotMeta.shortLabel}
                           </span>
                           <span className="text-[9px] font-survivor text-amber-300">
                             {def ? `Nv.${lv}/10` : 'Vacío'}

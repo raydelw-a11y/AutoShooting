@@ -2,7 +2,7 @@
   "name": "SURVIVOR.IO: Mundo Abierto & Evolución",
   "short_name": "Survivor.io",
   "description": "Juego estilo Survivor.io de Mundo Abierto con Auto-Save, Portales y Armas EVO.",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#090d16",

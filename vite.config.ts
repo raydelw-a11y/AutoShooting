@@ -19,6 +19,7 @@ export default defineConfig(() => {
   });
 
   return {
+    base: './',
     plugins: [react(), tailwindcss()],
     server: {
       allowedHosts: true,

@@ -126,6 +126,18 @@ export interface DeathGhost {
   radius: number;
 }
 
+export interface ImpactParticle {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  color: string;
+  life: number;
+  maxLife: number;
+}
+
 interface SurvivorCanvasProps {
   saveData: PersistentSaveData;
   currentWorld: WorldDefinition;
@@ -225,6 +237,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
   const dropsRef = useRef<DroppedItem[]>([]);
   const popupsRef = useRef<DamageNumberPopup[]>([]);
   const ghostsRef = useRef<DeathGhost[]>([]);
+  const particlesRef = useRef<ImpactParticle[]>([]);
   const nextEntityIdRef = useRef<number>(1);
 
   const durianRef = useRef({
@@ -246,6 +259,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     lightningsRef.current = [];
     dropsRef.current = [];
     ghostsRef.current = [];
+    particlesRef.current = [];
 
     durianRef.current.x = centerX + 95;
     durianRef.current.y = centerY - 95;
@@ -572,6 +586,33 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       };
     };
 
+    const spawnParticles = (
+      px: number,
+      py: number,
+      count: number,
+      color: string,
+      speedBase: number = 140,
+      sizeBase: number = 4
+    ) => {
+      if (particlesRef.current.length > 160) return;
+      for (let i = 0; i < count; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const spd = speedBase * (0.45 + Math.random() * 0.9);
+        const life = 0.25 + Math.random() * 0.28;
+        particlesRef.current.push({
+          id: nextEntityIdRef.current++,
+          x: px + (Math.random() - 0.5) * 8,
+          y: py + (Math.random() - 0.5) * 8,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd,
+          size: sizeBase * (0.7 + Math.random() * 0.7),
+          color,
+          life,
+          maxLife: life,
+        });
+      }
+    };
+
     const damageEnemy = (enemy: ActiveEnemy, baseAmount: number, knockbackStrength: number = 0) => {
       const stats = getPlayerStats();
       const isCrit = Math.random() < stats.critChance;
@@ -582,6 +623,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
       enemy.hp -= finalDamage;
       enemy.hitFlash = 0.12;
+
+      spawnParticles(
+        enemy.x,
+        enemy.y,
+        isCrit ? 6 : 3,
+        isCrit ? '#fde047' : '#86efac',
+        isCrit ? 175 : 115,
+        isCrit ? 4.5 : 3.2
+      );
 
       if (knockbackStrength > 0 && !enemy.isBoss) {
         const dx = enemy.x - playerRef.current.x;
@@ -622,9 +672,11 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         radius: 10,
         maxRadius: blastRadius,
         color,
-        life: 0.28,
-        maxLife: 0.28,
+        life: 0.32,
+        maxLife: 0.32,
       });
+      spawnParticles(ex, ey, 12, color, 220, 5.2);
+      spawnParticles(ex, ey, 6, '#fef08a', 150, 3.8);
       for (const e of enemiesRef.current) {
         if (Math.hypot(e.x - ex, e.y - ey) <= blastRadius + e.radius) {
           damageEnemy(e, dmg, 16);
@@ -2139,6 +2191,18 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           ghostsRef.current.splice(i, 1);
         }
       }
+
+      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
+        const pt = particlesRef.current[i];
+        pt.x += pt.vx * dt;
+        pt.y += pt.vy * dt;
+        pt.vx *= 0.92;
+        pt.vy *= 0.92;
+        pt.life -= dt;
+        if (pt.life <= 0) {
+          particlesRef.current.splice(i, 1);
+        }
+      }
     };
 
     const renderScene = (viewW: number, viewH: number, nowMs: number) => {
@@ -2151,7 +2215,18 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const camX = p.x - viewW / 2;
       const camY = p.y - viewH / 2;
 
-      ctx.fillStyle = world.bgPrimary;
+      // 1. FONDO DE MUNDO CON DEGRADADO PROFUNDO 2.5D
+      const bgGrad = ctx.createRadialGradient(
+        viewW / 2,
+        viewH * 0.45,
+        40,
+        viewW / 2,
+        viewH * 0.45,
+        Math.max(viewW, viewH) * 0.85
+      );
+      bgGrad.addColorStop(0, world.bgSecondary);
+      bgGrad.addColorStop(1, world.bgPrimary);
+      ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, viewW, viewH);
 
       ctx.save();
@@ -2163,14 +2238,64 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const startTileY = Math.floor(camY / tileSize) - 1;
       const endTileY = Math.ceil((camY + viewH) / tileSize) + 1;
 
+      // Textura de losas / terreno exterior y detalles ambientales
+      for (let ty = startTileY; ty <= endTileY; ty++) {
+        const yPos = ty * tileSize;
+        for (let tx = startTileX; tx <= endTileX; tx++) {
+          const xPos = tx * tileSize;
+          const hash = Math.abs((tx * 73856093) ^ (ty * 19349663)) % 100;
+
+          ctx.fillStyle =
+            (tx + ty) % 2 === 0 ? 'rgba(255, 255, 255, 0.025)' : 'rgba(0, 0, 0, 0.05)';
+          ctx.fillRect(xPos, yPos, tileSize, tileSize);
+
+          ctx.strokeStyle = 'rgba(15, 23, 42, 0.28)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(xPos, yPos, tileSize, tileSize);
+
+          // Grietas y detalles de terreno fuera de la autopista
+          if (hash < 35 && Math.abs(xPos) > 220 && Math.abs(xPos - 700) > 220 && Math.abs(xPos + 700) > 220) {
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(xPos + 60, yPos + 70);
+            ctx.lineTo(xPos + 95, yPos + 88);
+            ctx.lineTo(xPos + 112, yPos + 125);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Autopistas Principales con Bordillos Biselados 3D, Sombras y Alcantarillas
       const roadCentersX = [-700, 0, 700];
       for (const rcx of roadCentersX) {
         if (rcx + 240 < camX || rcx - 240 > camX + viewW) continue;
 
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
-        ctx.fillRect(rcx - 205, camY - 100, 14, viewH + 200);
-        ctx.fillRect(rcx + 191, camY - 100, 14, viewH + 200);
+        // Sombra exterior de la autopista
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+        ctx.fillRect(rcx - 216, camY - 100, 432, viewH + 200);
 
+        // Superficie de asfalto con degradado lateral
+        const roadGrad = ctx.createLinearGradient(rcx - 196, 0, rcx + 196, 0);
+        roadGrad.addColorStop(0, world.bgSecondary);
+        roadGrad.addColorStop(0.15, world.bgPrimary);
+        roadGrad.addColorStop(0.5, world.bgSecondary);
+        roadGrad.addColorStop(0.85, world.bgPrimary);
+        roadGrad.addColorStop(1, world.bgSecondary);
+        ctx.fillStyle = roadGrad;
+        ctx.fillRect(rcx - 196, camY - 100, 392, viewH + 200);
+
+        // Bordillos de concreto biselados a izquierda y derecha
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(rcx - 206, camY - 100, 12, viewH + 200);
+        ctx.fillRect(rcx + 194, camY - 100, 12, viewH + 200);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.fillRect(rcx - 198, camY - 100, 3, viewH + 200);
+        ctx.fillRect(rcx + 194, camY - 100, 3, viewH + 200);
+
+        // Doble línea central con reflejo sutil
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.fillRect(rcx - 10, camY - 100, 20, viewH + 200);
         ctx.fillStyle = world.laneLineColor;
         ctx.fillRect(rcx - 9, camY - 100, 6, viewH + 200);
         ctx.fillRect(rcx + 3, camY - 100, 6, viewH + 200);
@@ -2182,15 +2307,48 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         for (const rcx of roadCentersX) {
           if (rcx + 240 < camX || rcx - 240 > camX + viewW) continue;
 
+          // Líneas discontinuas con sombra 3D
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+          ctx.fillRect(rcx - 107, yPos + 23, 8, 92);
+          ctx.fillRect(rcx + 102, yPos + 23, 8, 92);
           ctx.fillStyle = world.laneLineColor;
           ctx.fillRect(rcx - 108, yPos + 20, 7, 92);
           ctx.fillRect(rcx + 101, yPos + 20, 7, 92);
+
+          // Alcantarillas metálicas detalladas cada 2 bloques
+          if (Math.abs(ty % 2) === 0) {
+            const mhX = rcx + (ty % 4 === 0 ? -52 : 52);
+            const mhY = yPos + 72;
+            ctx.save();
+            ctx.translate(mhX, mhY);
+            ctx.fillStyle = '#1e293b';
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(0, 0, 16, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.strokeStyle = '#475569';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(0, 0, 12, 0, Math.PI * 2);
+            ctx.moveTo(-9, -4);
+            ctx.lineTo(9, -4);
+            ctx.moveTo(-10, 0);
+            ctx.lineTo(10, 0);
+            ctx.moveTo(-9, 4);
+            ctx.lineTo(9, 4);
+            ctx.stroke();
+            ctx.restore();
+          }
 
           const drawRoadArrow = (ax: number, ay: number, pointDown: boolean) => {
             ctx.save();
             ctx.translate(ax, ay);
             if (!pointDown) ctx.scale(1, -1);
-            ctx.fillStyle = 'rgba(203, 213, 225, 0.38)';
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+            ctx.fillRect(-5, -22, 12, 26);
+            ctx.fillStyle = 'rgba(226, 232, 240, 0.42)';
             ctx.fillRect(-6, -24, 12, 26);
             ctx.beginPath();
             ctx.moveTo(-17, 0);
@@ -2206,12 +2364,18 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           drawRoadArrow(rcx + 58, yPos + 175, false);
           drawRoadArrow(rcx + 150, yPos + 175, false);
 
+          // Vallas y Barricadas Laterales en 3D con Poste, Remaches y Brillo
           if (Math.abs(ty % 3) !== 1) {
-            const drawWoodenRailSegment = (rx: number, ry: number, isLeft: boolean) => {
+            const drawBarrier3D = (rx: number, ry: number, isLeft: boolean) => {
               ctx.save();
-              const railW = 18;
+              const railW = 20;
               const bx = isLeft ? rx - railW : rx;
-              ctx.fillStyle =
+
+              // Sombra proyectada de la valla
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+              ctx.fillRect(bx + 4, ry + 12, railW, tileSize - 16);
+
+              const mainCol =
                 world.borderFenceStyle === 'wood_highway'
                   ? '#9a5b25'
                   : world.borderFenceStyle === 'steel_military'
@@ -2219,72 +2383,97 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                   : world.borderFenceStyle === 'cyber_grid'
                   ? '#4f46e5'
                   : '#b45309';
-              ctx.strokeStyle = '#0f172a';
+              const lightCol =
+                world.borderFenceStyle === 'wood_highway'
+                  ? '#d98a3c'
+                  : world.borderFenceStyle === 'steel_military'
+                  ? '#94a3b8'
+                  : world.borderFenceStyle === 'cyber_grid'
+                  ? '#818cf8'
+                  : '#f59e0b';
+
+              ctx.fillStyle = mainCol;
+              ctx.strokeStyle = '#090d16';
               ctx.lineWidth = 3;
-              ctx.fillRect(bx, ry + 8, railW, tileSize - 16);
-              ctx.strokeRect(bx, ry + 8, railW, tileSize - 16);
+              ctx.beginPath();
+              ctx.roundRect(bx, ry + 8, railW, tileSize - 16, 4);
+              ctx.fill();
+              ctx.stroke();
+
+              // Bisel de luz lateral
+              ctx.fillStyle = lightCol;
+              ctx.fillRect(bx + 3, ry + 11, 5, tileSize - 22);
 
               for (let py = ry + 18; py < ry + tileSize - 20; py += 42) {
-                ctx.fillStyle =
-                  world.borderFenceStyle === 'wood_highway' ? '#c87d32' : '#94a3b8';
-                ctx.fillRect(bx - 3, py, railW + 6, 14);
-                ctx.strokeRect(bx - 3, py, railW + 6, 14);
+                ctx.fillStyle = lightCol;
+                ctx.beginPath();
+                ctx.roundRect(bx - 3, py, railW + 6, 15, 3);
+                ctx.fill();
+                ctx.stroke();
+
+                // Remaches metálicos
+                ctx.fillStyle = '#e2e8f0';
+                ctx.beginPath();
+                ctx.arc(bx + 3, py + 7.5, 2, 0, Math.PI * 2);
+                ctx.arc(bx + railW - 3, py + 7.5, 2, 0, Math.PI * 2);
+                ctx.fill();
               }
               ctx.restore();
             };
 
-            drawWoodenRailSegment(rcx - 196, yPos, true);
-            drawWoodenRailSegment(rcx + 196, yPos, false);
+            drawBarrier3D(rcx - 196, yPos, true);
+            drawBarrier3D(rcx + 196, yPos, false);
           }
-        }
-
-        for (let tx = startTileX; tx <= endTileX; tx++) {
-          const xPos = tx * tileSize;
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(xPos, yPos, tileSize, tileSize);
         }
       }
 
-      // Portales del Mundo
+      // 2. PORTALES HOLOGRÁFICOS 3D DEL MUNDO
       for (const tp of world.teleporters) {
         const pulse = Math.sin(nowMs * 0.005) * 6;
         ctx.save();
         ctx.translate(tp.x, tp.y);
 
-        const grad = ctx.createRadialGradient(0, 0, 12, 0, 0, 68 + pulse);
-        grad.addColorStop(0, tp.color);
-        grad.addColorStop(0.55, `${tp.color}66`);
+        const grad = ctx.createRadialGradient(0, 0, 8, 0, 0, 76 + pulse);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.25, tp.color);
+        grad.addColorStop(0.65, `${tp.color}55`);
         grad.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(0, 0, 68 + pulse, 0, Math.PI * 2);
+        ctx.arc(0, 0, 76 + pulse, 0, Math.PI * 2);
         ctx.fill();
 
+        // Anillos rúnicos giratorios dobles
         ctx.lineWidth = 5;
         ctx.strokeStyle = '#000000';
         ctx.beginPath();
-        ctx.arc(0, 0, 44, 0, Math.PI * 2);
+        ctx.arc(0, 0, 45, 0, Math.PI * 2);
         ctx.stroke();
 
         ctx.lineWidth = 4;
         ctx.strokeStyle = tp.color;
         ctx.beginPath();
-        ctx.arc(0, 0, 40, nowMs * 0.003, nowMs * 0.003 + Math.PI * 1.4);
+        ctx.arc(0, 0, 42, nowMs * 0.003, nowMs * 0.003 + Math.PI * 1.4);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, 30, -nowMs * 0.004, -nowMs * 0.004 + Math.PI * 1.1);
         ctx.stroke();
 
         ctx.font = '900 12px "Fredoka", "Inter", sans-serif';
         ctx.textAlign = 'center';
         ctx.lineWidth = 4;
         ctx.strokeStyle = '#000000';
-        ctx.strokeText(tp.badge, 0, -54);
+        ctx.strokeText(tp.badge, 0, -56);
         ctx.fillStyle = '#fde047';
-        ctx.fillText(tp.badge, 0, -54);
+        ctx.fillText(tp.badge, 0, -56);
 
-        ctx.font = '700 11px "Inter", sans-serif';
-        ctx.strokeText(tp.label, 0, 62);
+        ctx.font = '800 11px "Inter", sans-serif';
+        ctx.strokeText(tp.label, 0, 64);
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(tp.label, 0, 62);
+        ctx.fillText(tp.label, 0, 64);
 
         if (Math.hypot(p.x - tp.x, p.y - tp.y) < 78 && p.portalCharge > 0) {
           const progress = Math.min(1, p.portalCharge / 1.15);
@@ -2298,37 +2487,52 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       }
 
-      // Charcos de Fuego
+      // 3. CHARCOS DE NAPALM / PLASMA CON BURBUJAS ÍGNEAS
       for (const h of hazardsRef.current) {
         ctx.save();
-        ctx.globalAlpha = Math.min(0.75, h.life / 0.6);
-        const grad = ctx.createRadialGradient(h.x, h.y, 6, h.x, h.y, h.radius);
-        grad.addColorStop(0, h.isEvo ? '#ecfeff' : '#fef08a');
-        grad.addColorStop(0.5, h.color);
+        ctx.globalAlpha = Math.min(0.82, h.life / 0.6);
+        const grad = ctx.createRadialGradient(h.x, h.y, 4, h.x, h.y, h.radius);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.28, h.isEvo ? '#67e8f9' : '#fef08a');
+        grad.addColorStop(0.65, h.color);
         grad.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
         ctx.fill();
+
+        // Anillo ardiente pulsante
+        ctx.strokeStyle = h.isEvo ? '#22d3ee' : '#f97316';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.radius * (0.65 + Math.sin(nowMs * 0.01 + h.id) * 0.15), 0, Math.PI * 2);
+        ctx.stroke();
         ctx.restore();
       }
 
-      // Aura Verde Octogonal si tiene equipada la Coraza Campo de Fuerza en Cuerpo
+      // 4. AURA OCTOGONAL HOLOGRÁFICA DEL CAMPO DE FUERZA
       const forceLv = weapons.forcefield || 0;
       if (forceLv > 0) {
         const isEvo = forceLv >= MAX_ITEM_LEVEL;
         const auraRadius = (isEvo ? 132 : 65 + (forceLv - 1) * 7) * stats.areaMult;
         ctx.save();
         ctx.translate(p.x, p.y);
-        ctx.rotate(nowMs * 0.0008);
+
+        const auraGrad = ctx.createRadialGradient(0, 0, auraRadius * 0.2, 0, 0, auraRadius);
+        auraGrad.addColorStop(0, 'rgba(16, 185, 129, 0.02)');
+        auraGrad.addColorStop(0.75, isEvo ? 'rgba(16, 185, 129, 0.14)' : 'rgba(34, 197, 94, 0.12)');
+        auraGrad.addColorStop(1, isEvo ? 'rgba(52, 211, 153, 0.32)' : 'rgba(74, 222, 128, 0.26)');
 
         const drawPolygonRing = (
           r: number,
           sides: number,
+          rot: number,
           strokeCol: string,
-          fillCol: string,
+          fillStyle: string | CanvasGradient,
           lineW: number
         ) => {
+          ctx.save();
+          ctx.rotate(rot);
           ctx.beginPath();
           for (let s = 0; s < sides; s++) {
             const ang = (s * Math.PI * 2) / sides;
@@ -2338,45 +2542,57 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             else ctx.lineTo(px, py);
           }
           ctx.closePath();
-          ctx.fillStyle = fillCol;
+          ctx.fillStyle = fillStyle;
           ctx.fill();
           ctx.lineWidth = lineW;
           ctx.strokeStyle = strokeCol;
           ctx.stroke();
+          ctx.restore();
         };
 
         drawPolygonRing(
           auraRadius,
           8,
-          isEvo ? '#10b981' : '#22c55e',
-          isEvo ? 'rgba(16, 185, 129, 0.16)' : 'rgba(34, 197, 94, 0.16)',
+          nowMs * 0.0009,
+          isEvo ? '#34d399' : '#4ade80',
+          auraGrad,
           3.5
         );
         drawPolygonRing(
           auraRadius * 0.72,
           8,
-          isEvo ? 'rgba(52, 211, 153, 0.85)' : 'rgba(74, 222, 128, 0.85)',
-          'rgba(34, 197, 94, 0.08)',
-          2.5
+          -nowMs * 0.0012,
+          isEvo ? 'rgba(110, 231, 183, 0.85)' : 'rgba(134, 239, 172, 0.8)',
+          'rgba(34, 197, 94, 0.05)',
+          2
         );
         ctx.restore();
       }
 
-      // Gemas, Monedas, Imanes y COFRE CON ARCOÍRIS
+      // 5. CRISTALES DE XP FACETADOS, MONEDAS 3D Y COFRE ARCOÍRIS DE LUJO
       for (const item of dropsRef.current) {
         if (item.type === 'chest_rainbow') {
           ctx.save();
           ctx.translate(item.x, item.y);
 
-          const beamHeight = 750;
-          const beamWidth = 42;
+          // Sombra y halo dorado en el suelo
+          const groundGlow = ctx.createRadialGradient(0, 10, 4, 0, 10, 48);
+          groundGlow.addColorStop(0, 'rgba(250, 204, 21, 0.65)');
+          groundGlow.addColorStop(1, 'rgba(250, 204, 21, 0)');
+          ctx.fillStyle = groundGlow;
+          ctx.beginPath();
+          ctx.ellipse(0, 12, 46, 20, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          const beamHeight = 760;
+          const beamWidth = 44;
           const rainbowColors = [
-            'rgba(239, 68, 68, 0.55)',
-            'rgba(249, 115, 22, 0.55)',
-            'rgba(250, 204, 21, 0.58)',
-            'rgba(34, 197, 94, 0.55)',
-            'rgba(56, 189, 248, 0.55)',
-            'rgba(168, 85, 247, 0.55)',
+            'rgba(239, 68, 68, 0.58)',
+            'rgba(249, 115, 22, 0.58)',
+            'rgba(250, 204, 21, 0.62)',
+            'rgba(34, 197, 94, 0.58)',
+            'rgba(56, 189, 248, 0.58)',
+            'rgba(168, 85, 247, 0.58)',
           ];
           const stripeW = beamWidth / rainbowColors.length;
           for (let c = 0; c < rainbowColors.length; c++) {
@@ -2386,10 +2602,10 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             vGrad.addColorStop(0.85, rainbowColors[c]);
             vGrad.addColorStop(1, 'rgba(255,255,255,0)');
             ctx.fillStyle = vGrad;
-            ctx.fillRect(sx, -beamHeight, stripeW + 0.5, beamHeight);
+            ctx.fillRect(sx, -beamHeight, stripeW + 0.6, beamHeight);
           }
 
-          const arcRadii = [58, 53, 48, 43, 38, 33];
+          const arcRadii = [60, 55, 50, 45, 40, 35];
           for (let c = 0; c < arcRadii.length; c++) {
             ctx.beginPath();
             ctx.arc(0, 6, arcRadii[c], Math.PI * 1.08, Math.PI * 1.92);
@@ -2398,29 +2614,37 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             ctx.stroke();
           }
 
-          const bobY = Math.sin(item.bobPhase) * 2.5;
+          const bobY = Math.sin(item.bobPhase) * 3;
           ctx.translate(0, bobY);
-          ctx.fillStyle = '#dc2626';
+
+          // Cuerpo del cofre con degradado rubí 3D
+          const chestGrad = ctx.createLinearGradient(0, -18, 0, 18);
+          chestGrad.addColorStop(0, '#f87171');
+          chestGrad.addColorStop(0.45, '#dc2626');
+          chestGrad.addColorStop(1, '#7f1d1d');
+          ctx.fillStyle = chestGrad;
           ctx.strokeStyle = '#000000';
-          ctx.lineWidth = 3;
+          ctx.lineWidth = 3.2;
           ctx.beginPath();
-          ctx.roundRect(-20, -16, 40, 32, 5);
+          ctx.roundRect(-22, -17, 44, 34, 6);
           ctx.fill();
           ctx.stroke();
 
+          // Bandas de oro reluciente
           ctx.fillStyle = '#fbbf24';
-          ctx.fillRect(-20, -4, 40, 7);
-          ctx.strokeRect(-20, -4, 40, 7);
-          ctx.fillRect(-18, -15, 6, 30);
-          ctx.fillRect(12, -15, 6, 30);
+          ctx.fillRect(-22, -4, 44, 7);
+          ctx.strokeRect(-22, -4, 44, 7);
+          ctx.fillRect(-19, -16, 6, 32);
+          ctx.fillRect(13, -16, 6, 32);
 
+          // Gema central del cofre
           ctx.beginPath();
-          ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
+          ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
           ctx.fillStyle = '#fde047';
           ctx.fill();
           ctx.stroke();
           ctx.beginPath();
-          ctx.arc(0, 0, 3, 0, Math.PI * 2);
+          ctx.arc(0, 0, 3.8, 0, Math.PI * 2);
           ctx.fillStyle = '#ef4444';
           ctx.fill();
 
@@ -2432,47 +2656,90 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ) {
           ctx.save();
           ctx.translate(item.x, item.y);
-          const r = item.type === 'xp_gold' ? 8.5 : item.type === 'xp_blue' ? 7.5 : 6.5;
-          ctx.beginPath();
-          ctx.moveTo(0, -r);
-          ctx.lineTo(r, 0);
-          ctx.lineTo(0, r);
-          ctx.lineTo(-r, 0);
-          ctx.closePath();
-          ctx.fillStyle =
+          const r = item.type === 'xp_gold' ? 9.5 : item.type === 'xp_blue' ? 8.2 : 7.2;
+          const mainCol =
             item.type === 'xp_gold'
               ? '#facc15'
               : item.type === 'xp_blue'
               ? '#38bdf8'
               : '#4ade80';
+          const darkCol =
+            item.type === 'xp_gold'
+              ? '#a16207'
+              : item.type === 'xp_blue'
+              ? '#0369a1'
+              : '#15803d';
+
+          // Halo suave bajo el cristal
+          ctx.fillStyle =
+            item.type === 'xp_gold'
+              ? 'rgba(250, 204, 21, 0.28)'
+              : item.type === 'xp_blue'
+              ? 'rgba(56, 189, 248, 0.25)'
+              : 'rgba(74, 222, 128, 0.24)';
+          ctx.beginPath();
+          ctx.arc(0, 0, r * 1.45, 0, Math.PI * 2);
           ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#14532d';
+
+          // Rombo facetado exterior
+          ctx.beginPath();
+          ctx.moveTo(0, -r);
+          ctx.lineTo(r * 0.88, 0);
+          ctx.lineTo(0, r);
+          ctx.lineTo(-r * 0.88, 0);
+          ctx.closePath();
+          ctx.fillStyle = mainCol;
+          ctx.fill();
+          ctx.lineWidth = 2.2;
+          ctx.strokeStyle = '#052e16';
           ctx.stroke();
 
+          // Faceta oscura inferior derecha para efecto 3D
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(r * 0.88, 0);
+          ctx.lineTo(0, r);
+          ctx.closePath();
+          ctx.fillStyle = darkCol;
+          ctx.fill();
+
+          // Brillo cristalino superior izquierdo
           ctx.fillStyle = '#ffffff';
           ctx.beginPath();
-          ctx.arc(-1.5, -1.5, 1.8, 0, Math.PI * 2);
+          ctx.moveTo(0, -r * 0.72);
+          ctx.lineTo(-r * 0.48, -r * 0.12);
+          ctx.lineTo(0, -r * 0.18);
+          ctx.closePath();
           ctx.fill();
           ctx.restore();
         } else if (item.type === 'coin') {
           ctx.save();
           ctx.translate(item.x, item.y);
+          const spinScale = 0.72 + Math.abs(Math.sin(nowMs * 0.005 + item.id)) * 0.28;
+          ctx.scale(spinScale, 1);
+
           ctx.beginPath();
-          ctx.arc(0, 0, 8, 0, Math.PI * 2);
+          ctx.arc(0, 0, 9, 0, Math.PI * 2);
           ctx.fillStyle = '#facc15';
           ctx.fill();
-          ctx.lineWidth = 2.2;
+          ctx.lineWidth = 2.4;
           ctx.strokeStyle = '#000000';
           ctx.stroke();
-          ctx.fillStyle = '#ca8a04';
-          ctx.fillRect(-2, -4, 4, 8);
+
+          ctx.beginPath();
+          ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+          ctx.strokeStyle = '#ca8a04';
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+
+          ctx.fillStyle = '#fef08a';
+          ctx.fillRect(-1.5, -4, 3, 8);
           ctx.restore();
         } else {
           ctx.save();
-          ctx.translate(item.x, item.y + Math.sin(item.bobPhase) * 3);
+          ctx.translate(item.x, item.y + Math.sin(item.bobPhase) * 3.5);
           ctx.beginPath();
-          ctx.arc(0, 0, 14, 0, Math.PI * 2);
+          ctx.arc(0, 0, 15, 0, Math.PI * 2);
           ctx.fillStyle =
             item.type === 'magnet'
               ? '#2563eb'
@@ -2480,10 +2747,10 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               ? '#16a34a'
               : '#dc2626';
           ctx.fill();
-          ctx.lineWidth = 2.5;
+          ctx.lineWidth = 2.8;
           ctx.strokeStyle = '#000000';
           ctx.stroke();
-          ctx.font = '14px sans-serif';
+          ctx.font = '15px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillText(
@@ -2495,31 +2762,41 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
+      // Fantasmas de muerte al caer enemigos
       for (const g of ghostsRef.current) {
         ctx.save();
-        ctx.globalAlpha = g.life / g.maxLife;
-        ctx.translate(g.x, g.y - (1 - g.life / g.maxLife) * 18);
-        ctx.fillStyle = '#d9f99d';
+        ctx.globalAlpha = (g.life / g.maxLife) * 0.85;
+        ctx.translate(g.x, g.y - (1 - g.life / g.maxLife) * 24);
+        ctx.fillStyle = '#ecfccb';
+        ctx.strokeStyle = '#14532d';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.ellipse(0, 0, g.radius * 0.7, g.radius * 1.15, 0, 0, Math.PI * 2);
+        ctx.arc(0, -4, g.radius * 0.65, 0, Math.PI * 2);
         ctx.fill();
+        ctx.stroke();
         ctx.restore();
       }
 
-      // Soldados Zombi, Élites y Jefes
+      // 6. SOLDADOS ZOMBI, ÉLITES Y JEFES EN HD 2.5D
       for (const e of enemiesRef.current) {
         ctx.save();
-        const bob = Math.sin(e.walkCycle) * 2;
+        const bob = Math.sin(e.walkCycle) * 2.2;
+        const legSwing = Math.sin(e.walkCycle) * 4.5;
         ctx.translate(e.x, e.y + bob);
 
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+        // Sombra elíptica suave bajo el enemigo
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
         ctx.beginPath();
-        ctx.ellipse(0, e.radius + 2, e.radius * 0.85, e.radius * 0.35, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, e.radius + 3, e.radius * 0.92, e.radius * 0.38, 0, 0, Math.PI * 2);
         ctx.fill();
 
+        // Aura amenazante para Élites y Jefes
         if (e.isElite || e.isBoss) {
+          const auraCol = e.isBoss ? 'rgba(239, 68, 68, 0.28)' : 'rgba(245, 158, 11, 0.22)';
+          ctx.fillStyle = auraCol;
           ctx.beginPath();
-          ctx.arc(0, 0, e.radius + 5, 0, Math.PI * 2);
+          ctx.arc(0, 0, e.radius + 8 + Math.sin(nowMs * 0.008) * 3, 0, Math.PI * 2);
+          ctx.fill();
           ctx.strokeStyle = e.isBoss ? '#ef4444' : '#facc15';
           ctx.lineWidth = 2.5;
           ctx.stroke();
@@ -2528,67 +2805,111 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         const scale = e.radius / 17;
         ctx.scale(e.facingLeft ? -scale : scale, scale);
 
-        ctx.fillStyle = e.hitFlash > 0 ? '#ffffff' : e.bodyColor;
+        const isFlash = e.hitFlash > 0;
+
+        // Piernas animadas con botas tácticas
+        ctx.fillStyle = isFlash ? '#ffffff' : '#1e293b';
         ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2.6;
+        ctx.lineWidth = 2.4;
         ctx.beginPath();
-        ctx.roundRect(-10, -2, 20, 16, 4);
+        ctx.roundRect(-8 + legSwing * 0.4, 9, 6.5, 8, 2);
+        ctx.roundRect(1.5 - legSwing * 0.4, 9, 6.5, 8, 2);
         ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = e.hitFlash > 0 ? '#ffffff' : '#86efac';
+        // Torso / Uniforme con cinturón táctico
+        ctx.fillStyle = isFlash ? '#ffffff' : e.bodyColor;
         ctx.beginPath();
-        ctx.roundRect(-12, -16, 24, 16, 5);
+        ctx.roundRect(-11, -3, 22, 15, 4);
         ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = '#ffffff';
+        if (!isFlash) {
+          // Cinturón y hebilla
+          ctx.fillStyle = '#27272a';
+          ctx.fillRect(-10, 6, 20, 3.5);
+          ctx.fillStyle = '#fbbf24';
+          ctx.fillRect(-2.5, 5.5, 5, 4.5);
+        }
+
+        // Cabeza Zombi HD con mandíbula y cicatriz
+        ctx.fillStyle = isFlash ? '#ffffff' : '#86efac';
         ctx.beginPath();
-        ctx.arc(2, -9, 3.2, 0, Math.PI * 2);
-        ctx.arc(8, -9, 3.2, 0, Math.PI * 2);
+        ctx.roundRect(-12, -17, 24, 16, 5);
         ctx.fill();
         ctx.stroke();
-        ctx.fillStyle = '#000000';
+
+        // Ojos brillantes (rojos furiosos en Élites/Jefes, amarillos/blancos en tropas)
+        ctx.fillStyle = e.isBoss ? '#ef4444' : e.isElite ? '#fde047' : '#ffffff';
         ctx.beginPath();
-        ctx.arc(2.6, -9, 1.2, 0, Math.PI * 2);
-        ctx.arc(8.6, -9, 1.2, 0, Math.PI * 2);
+        ctx.arc(2, -9.5, 3.4, 0, Math.PI * 2);
+        ctx.arc(8.2, -9.5, 3.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = e.isBoss ? '#fef08a' : '#090d16';
+        ctx.beginPath();
+        ctx.arc(2.8, -9.5, 1.4, 0, Math.PI * 2);
+        ctx.arc(9.0, -9.5, 1.4, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = e.hitFlash > 0 ? '#ffffff' : e.helmetColor;
+        // Boca dentada gruñendo
+        if (!isFlash) {
+          ctx.fillStyle = '#064e3b';
+          ctx.fillRect(1, -4.5, 8, 2.5);
+        }
+
+        // Casco Militar Abovedado con Brillo Especular 3D
+        ctx.fillStyle = isFlash ? '#ffffff' : e.helmetColor;
         ctx.beginPath();
-        ctx.arc(0, -14, 13.5, Math.PI, 0);
+        ctx.arc(0, -14, 14, Math.PI, 0);
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = '#92400e';
-        ctx.fillRect(-13, -16, 26, 3.5);
-        ctx.strokeRect(-13, -16, 26, 3.5);
+        if (!isFlash) {
+          // Brillo superior en el casco
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+          ctx.beginPath();
+          ctx.ellipse(-3, -21, 6, 2.5, -0.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
-        ctx.fillStyle = e.gunColor;
-        ctx.fillRect(-2, 3, 18, 5);
-        ctx.strokeRect(-2, 3, 18, 5);
-        ctx.fillRect(6, 7, 4, 5);
-        ctx.strokeRect(6, 7, 4, 5);
+        // Correa del casco
+        ctx.fillStyle = '#78350f';
+        ctx.fillRect(-13.5, -16, 27, 3.8);
+        ctx.strokeRect(-13.5, -16, 27, 3.8);
+
+        // Fusil / Arma de asalto con cañón y cargador
+        ctx.fillStyle = isFlash ? '#ffffff' : e.gunColor;
+        ctx.beginPath();
+        ctx.roundRect(-3, 2.5, 20, 5.5, 1.5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillRect(6, 7.5, 4.5, 5.5);
+        ctx.strokeRect(6, 7.5, 4.5, 5.5);
 
         ctx.restore();
 
+        // Barra de vida de enemigos dañados con borde negro y color por rango
         if (e.hp < e.maxHp) {
-          const bw = e.isBoss || e.isElite ? e.radius * 2.2 : e.radius * 1.75;
-          const bh = e.isBoss || e.isElite ? 5 : 3.5;
+          const bw = e.isBoss || e.isElite ? e.radius * 2.3 : e.radius * 1.8;
+          const bh = e.isBoss || e.isElite ? 5.5 : 4;
           ctx.fillStyle = '#000000';
-          ctx.fillRect(e.x - bw / 2 - 1, e.y - e.radius - 13, bw + 2, bh + 2);
+          ctx.fillRect(e.x - bw / 2 - 1.5, e.y - e.radius - 14, bw + 3, bh + 3);
+          ctx.fillStyle = '#1e293b';
+          ctx.fillRect(e.x - bw / 2, e.y - e.radius - 12.5, bw, bh);
           ctx.fillStyle = e.isBoss ? '#ef4444' : e.isElite ? '#f59e0b' : '#22c55e';
           ctx.fillRect(
             e.x - bw / 2,
-            e.y - e.radius - 12,
+            e.y - e.radius - 12.5,
             bw * Math.max(0, e.hp / e.maxHp),
             bh
           );
         }
       }
 
-      // Discos del Exotraje Guardián si está equipado en Cuerpo
+      // 7. DISCOS DE SIERRA DEL EXOTRAJE GUARDIÁN
       const guardianLv = weapons.guardian || 0;
       if (guardianLv > 0) {
         const isEvo = guardianLv >= MAX_ITEM_LEVEL;
@@ -2600,23 +2921,35 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           const by = p.y + Math.sin(ang) * orbitRadius;
           ctx.save();
           ctx.translate(bx, by);
-          ctx.rotate(nowMs * 0.015);
+          ctx.rotate(nowMs * 0.018);
+
+          // Dientes de sierra metálicos
+          const r = isEvo ? 18 : 14;
           ctx.fillStyle = isEvo ? '#ef4444' : '#f59e0b';
           ctx.strokeStyle = '#000000';
-          ctx.lineWidth = 2.5;
+          ctx.lineWidth = 2.4;
           ctx.beginPath();
-          ctx.arc(0, 0, isEvo ? 16 : 13, 0, Math.PI * 2);
+          const teeth = 8;
+          for (let t = 0; t < teeth * 2; t++) {
+            const tr = t % 2 === 0 ? r + 4 : r - 2;
+            const ta = (t * Math.PI) / teeth;
+            if (t === 0) ctx.moveTo(Math.cos(ta) * tr, Math.sin(ta) * tr);
+            else ctx.lineTo(Math.cos(ta) * tr, Math.sin(ta) * tr);
+          }
+          ctx.closePath();
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = '#fde047';
+
+          ctx.fillStyle = '#fef08a';
           ctx.beginPath();
-          ctx.arc(0, 0, 5, 0, Math.PI * 2);
+          ctx.arc(0, 0, 5.5, 0, Math.PI * 2);
           ctx.fill();
+          ctx.stroke();
           ctx.restore();
         }
       }
 
-      // Guardián Espinoso (Durian) si está equipado como Acompañante
+      // 8. DURIÁN GIGANTE / CALTROPS CON SOMBRA Y PÚAS 3D
       const durianLv = weapons.durian || 0;
       if (durianLv > 0) {
         const isEvo = durianLv >= MAX_ITEM_LEVEL;
@@ -2629,9 +2962,9 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 3;
         ctx.beginPath();
-        const spikes = 12;
+        const spikes = 14;
         for (let s = 0; s < spikes * 2; s++) {
-          const r = s % 2 === 0 ? durRadius + 7 : durRadius - 4;
+          const r = s % 2 === 0 ? durRadius + 8 : durRadius - 4;
           const a = (s * Math.PI) / spikes;
           if (s === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
           else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
@@ -2639,33 +2972,52 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+
+        ctx.fillStyle = isEvo ? '#fda4af' : '#d9f99d';
+        ctx.beginPath();
+        ctx.arc(0, 0, durRadius * 0.45, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
         ctx.restore();
       }
 
-      // 9. DIBUJAR AL HÉROE CON SUS 8 RANURAS VISUALES (Casco, Cuerpo, 2 Manos, 2 Hombros, 2 Acompañantes)
+      // 9. DIBUJAR AL HÉROE HD 2.5D CON SUS 8 RANURAS VISUALES
       ctx.save();
       ctx.translate(p.x, p.y);
 
-      ctx.save();
-      ctx.translate(0, -32);
-      ctx.fillStyle = '#dcfce7';
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2.2;
-      ctx.beginPath();
-      ctx.moveTo(0, -7);
-      ctx.lineTo(6, 4);
-      ctx.lineTo(-6, 4);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
+      // Flecha indicadora de dirección sobre la cabeza
+      if (!p.isDead) {
+        ctx.save();
+        ctx.translate(0, -34);
+        ctx.fillStyle = '#dcfce7';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.moveTo(0, -8);
+        ctx.lineTo(6.5, 4);
+        ctx.lineTo(-6.5, 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
 
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+      // Sombra proyectada y anillo de poder bajo los pies del héroe
+      const heroGlow = ctx.createRadialGradient(0, 16, 4, 0, 16, 30);
+      heroGlow.addColorStop(0, `${stats.hero.visorColor}66`);
+      heroGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = heroGlow;
       ctx.beginPath();
-      ctx.ellipse(0, 17, 15, 6, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 17, 28, 12, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      const heroBob = p.isDead ? 0 : Math.sin(p.walkCycle) * 1.8;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(0, 17, 16, 6.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const heroBob = p.isDead ? 0 : Math.sin(p.walkCycle) * 2;
+      const heroLegSwing = p.isDead ? 0 : Math.sin(p.walkCycle) * 5;
       ctx.save();
       ctx.translate(0, heroBob);
       if (p.isDead) {
@@ -2680,86 +3032,145 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const helmetDef = slots.helmet ? WEAPONS_CATALOG[slots.helmet] : null;
       const isHurt = p.hurtFlash > 0;
 
-      // Módulos de Hombro Izquierdo y Hombro Derecho montados sobre los hombros
+      // Bufanda / Capa ondeando al viento detrás del héroe
+      const capeWave = Math.sin(nowMs * 0.012 + p.walkCycle) * 4;
+      ctx.fillStyle = isHurt ? '#ef4444' : stats.hero.scarfColor;
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(-10, -4);
+      ctx.quadraticCurveTo(-22, 2 + capeWave * 0.5, -25, 11 + capeWave);
+      ctx.lineTo(-12, 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Botas tácticas animadas del héroe
+      ctx.fillStyle = isHurt ? '#ffffff' : '#1e293b';
+      ctx.beginPath();
+      ctx.roundRect(-8 + heroLegSwing * 0.45, 9, 6.5, 8.5, 2.5);
+      ctx.roundRect(1.5 - heroLegSwing * 0.45, 9, 6.5, 8.5, 2.5);
+      ctx.fill();
+      ctx.stroke();
+
+      // Módulos de Hombro Izquierdo y Hombro Derecho con cañón y LED
       if (slots.leftShoulder) {
         const lsDef = WEAPONS_CATALOG[slots.leftShoulder];
         ctx.fillStyle = isHurt ? '#ef4444' : lsDef.color;
         ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2.2;
-        ctx.fillRect(-16, -12, 8, 10);
-        ctx.strokeRect(-16, -12, 8, 10);
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.roundRect(-18, -13, 9, 11, 2.5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fde047';
+        ctx.beginPath();
+        ctx.arc(-13.5, -9, 2, 0, Math.PI * 2);
+        ctx.fill();
       }
       if (slots.rightShoulder) {
         const rsDef = WEAPONS_CATALOG[slots.rightShoulder];
         ctx.fillStyle = isHurt ? '#ef4444' : rsDef.color;
         ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2.2;
-        ctx.fillRect(8, -12, 8, 10);
-        ctx.strokeRect(8, -12, 8, 10);
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.roundRect(9, -13, 9, 11, 2.5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(13.5, -9, 2, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      // Armadura de Cuerpo / Capa
+      // Armadura de Cuerpo con Reactor Central Luminoso
       ctx.fillStyle = isHurt ? '#ef4444' : bodyDef ? bodyDef.color : stats.hero.scarfColor;
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 2.8;
       ctx.beginPath();
-      ctx.roundRect(-14, -4, 24, 17, 4);
+      ctx.roundRect(-13, -4, 24, 16, 4.5);
       ctx.fill();
       ctx.stroke();
 
-      // Cabeza
+      if (!isHurt) {
+        // Núcleo de energía en el pecho de la armadura
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(0, 4.5, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // Cabeza HD
       ctx.fillStyle = isHurt ? '#fca5a5' : '#fed7aa';
       ctx.beginPath();
-      ctx.roundRect(-11, -18, 22, 16, 5);
+      ctx.roundRect(-11.5, -19, 23, 16.5, 5.5);
       ctx.fill();
       ctx.stroke();
 
-      // Casco / Visor equipado
+      // Casco / Visor Táctico con Reflejo Cristalino
       ctx.fillStyle = isHurt ? '#ffffff' : helmetDef ? helmetDef.color : stats.hero.visorColor;
       ctx.beginPath();
-      ctx.roundRect(-10, -17, 20, 8, 3);
+      ctx.roundRect(-10.5, -18, 21, 8.5, 3.5);
       ctx.fill();
       ctx.stroke();
 
+      if (!isHurt) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+        ctx.fillRect(-7, -16.5, 7, 2.5);
+      }
+
+      // Cuello de la bufanda
       ctx.fillStyle = isHurt ? '#dc2626' : stats.hero.scarfColor;
-      ctx.fillRect(-11, -6, 22, 6);
-      ctx.strokeRect(-11, -6, 22, 6);
+      ctx.beginPath();
+      ctx.roundRect(-11.5, -6, 23, 6, 2);
+      ctx.fill();
+      ctx.stroke();
 
-      // Arma en Mano Derecha
-      if (slots.rightHand) {
-        const rhDef = WEAPONS_CATALOG[slots.rightHand];
+      // Función auxiliar para dibujar el arma equipada en cada mano con alto detalle
+      const drawEquippedHandWeapon = (wId: WeaponId, isLeftHand: boolean) => {
+        const wDef = WEAPONS_CATALOG[wId];
+        const wLv = weapons[wId] || 1;
+        const isEvo = wLv >= MAX_ITEM_LEVEL;
         ctx.save();
-        ctx.translate(13, 2);
-        ctx.rotate(-0.35);
-        ctx.fillStyle = rhDef.color;
-        ctx.beginPath();
-        ctx.moveTo(14, 0);
-        ctx.lineTo(-2, -5);
-        ctx.lineTo(1, 0);
-        ctx.lineTo(-2, 5);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      }
+        ctx.translate(isLeftHand ? -13 : 13, 2.5);
+        ctx.rotate(isLeftHand ? -2.65 : -0.35);
 
-      // Arma en Mano Izquierda
-      if (slots.leftHand) {
-        const lhDef = WEAPONS_CATALOG[slots.leftHand];
-        ctx.save();
-        ctx.translate(-13, 3);
-        ctx.rotate(-2.7);
-        ctx.fillStyle = lhDef.color;
-        ctx.beginPath();
-        ctx.moveTo(13, 0);
-        ctx.lineTo(-2, -4.5);
-        ctx.lineTo(1, 0);
-        ctx.lineTo(-2, 4.5);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
+        ctx.fillStyle = isEvo ? wDef.evoColor : wDef.color;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2.3;
+
+        if (wId === 'shotgun' || wId === 'plasma_rifle') {
+          ctx.beginPath();
+          ctx.roundRect(-2, -3.5, 18, 7, 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillRect(5, -1.5, 8, 3);
+        } else if (wId === 'katana' || wId === 'reaper_scythe') {
+          ctx.beginPath();
+          ctx.moveTo(22, 0);
+          ctx.lineTo(0, -4.5);
+          ctx.lineTo(-4, 0);
+          ctx.lineTo(0, 4.5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(15, 0);
+          ctx.lineTo(-2, -5.5);
+          ctx.lineTo(1.5, 0);
+          ctx.lineTo(-2, 5.5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
         ctx.restore();
-      }
+      };
+
+      if (slots.rightHand) drawEquippedHandWeapon(slots.rightHand, false);
+      if (slots.leftHand) drawEquippedHandWeapon(slots.leftHand, true);
 
       ctx.restore();
 
@@ -2769,20 +3180,36 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.fillText('💀', 0, -18);
       }
 
-      // Dibujar los 2 Acompañantes activos alrededor del Héroe
+      // Dibujar los 2 Acompañantes activos alrededor del Héroe con hélices/halo
       const drawCompanionUnit = (compId: WeaponId | null, sideSign: number) => {
         if (!compId || p.isDead) return;
         const cDef = WEAPONS_CATALOG[compId];
         const lv = weapons[compId] || 1;
         const isEvo = lv >= MAX_ITEM_LEVEL;
-        const cx = Math.cos(companionAngle + (sideSign > 0 ? 0 : Math.PI)) * 38;
-        const cy = -24 + Math.sin(companionAngle + (sideSign > 0 ? 0 : Math.PI)) * 16;
+        const cx = Math.cos(companionAngle + (sideSign > 0 ? 0 : Math.PI)) * 40;
+        const cy = -25 + Math.sin(companionAngle + (sideSign > 0 ? 0 : Math.PI)) * 16;
 
         ctx.save();
         ctx.translate(cx, cy);
+
+        // Halo de energía bajo el acompañante
+        ctx.fillStyle = `${isEvo ? cDef.evoColor : cDef.color}44`;
+        ctx.beginPath();
+        ctx.arc(0, 0, isEvo ? 16 : 13, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Hélices giratorias para drones
+        const rotorAng = nowMs * 0.025;
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.75)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(rotorAng) * 14, Math.sin(rotorAng) * 14);
+        ctx.lineTo(-Math.cos(rotorAng) * 14, -Math.sin(rotorAng) * 14);
+        ctx.stroke();
+
         ctx.fillStyle = isEvo ? cDef.evoColor : cDef.color;
         ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2.2;
+        ctx.lineWidth = 2.4;
         ctx.beginPath();
         ctx.arc(0, 0, isEvo ? 11.5 : 9.5, 0, Math.PI * 2);
         ctx.fill();
@@ -2798,29 +3225,42 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       drawCompanionUnit(save.equippedSlots.companion1, 1);
       drawCompanionUnit(save.equippedSlots.companion2, -1);
 
-      // Barra de vida debajo del héroe con texto numérico de HP
-      const hpBarW = 50;
-      const hpBarH = 8;
+      // Barra de vida tipo cápsula brillante debajo del héroe
+      const hpBarW = 54;
+      const hpBarH = 8.5;
       ctx.fillStyle = '#000000';
-      ctx.fillRect(-hpBarW / 2 - 2, 22, hpBarW + 4, hpBarH + 4);
+      ctx.beginPath();
+      ctx.roundRect(-hpBarW / 2 - 2, 22, hpBarW + 4, hpBarH + 4, 5);
+      ctx.fill();
+
       ctx.fillStyle = '#1f2937';
-      ctx.fillRect(-hpBarW / 2, 24, hpBarW, hpBarH);
+      ctx.beginPath();
+      ctx.roundRect(-hpBarW / 2, 24, hpBarW, hpBarH, 3.5);
+      ctx.fill();
+
       const hpPct = Math.max(0, Math.min(1, p.hp / p.maxHp));
-      ctx.fillStyle = hpPct > 0.35 ? '#84cc16' : '#ef4444';
-      ctx.fillRect(-hpBarW / 2, 24, hpBarW * hpPct, hpBarH);
+      if (hpPct > 0) {
+        ctx.fillStyle = hpPct > 0.35 ? '#84cc16' : '#ef4444';
+        ctx.beginPath();
+        ctx.roundRect(-hpBarW / 2, 24, hpBarW * hpPct, hpBarH, 3.5);
+        ctx.fill();
+        // Reflejo blanco superior en la barra de vida
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.fillRect(-hpBarW / 2 + 2, 25, Math.max(0, hpBarW * hpPct - 4), 2.2);
+      }
 
       ctx.font = '900 9px "Inter", sans-serif';
       ctx.textAlign = 'center';
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = 2.6;
       ctx.strokeStyle = '#000000';
       const hpLabel = p.isDead ? 'MUERTO (0 HP)' : `${Math.ceil(p.hp)}/${Math.round(p.maxHp)}`;
-      ctx.strokeText(hpLabel, 0, 41);
+      ctx.strokeText(hpLabel, 0, 42);
       ctx.fillStyle = p.isDead ? '#ef4444' : '#ffffff';
-      ctx.fillText(hpLabel, 0, 41);
+      ctx.fillText(hpLabel, 0, 42);
 
       ctx.restore();
 
-      // 10. Dibujar Proyectiles
+      // 10. DIBUJAR PROYECTILES CON BRILLO Y ESTELAS VOLUMÉTRICAS
       for (const proj of projectilesRef.current) {
         if (proj.trail && proj.trail.length > 1) {
           ctx.save();
@@ -2830,13 +3270,13 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             ctx.fillStyle =
               proj.weaponId === 'drone'
                 ? proj.isEvo
-                  ? `rgba(244, 63, 94, ${ratio * 0.55})`
-                  : `rgba(226, 232, 240, ${ratio * 0.55})`
+                  ? `rgba(244, 63, 94, ${ratio * 0.6})`
+                  : `rgba(56, 189, 248, ${ratio * 0.55})`
                 : proj.weaponId === 'rpg'
-                ? `rgba(251, 146, 60, ${ratio * 0.6})`
-                : `rgba(168, 85, 247, ${ratio * 0.55})`;
+                ? `rgba(251, 146, 60, ${ratio * 0.65})`
+                : `rgba(168, 85, 247, ${ratio * 0.6})`;
             ctx.beginPath();
-            ctx.arc(pt.x, pt.y, ratio * 5, 0, Math.PI * 2);
+            ctx.arc(pt.x, pt.y, ratio * 5.5, 0, Math.PI * 2);
             ctx.fill();
           }
           ctx.restore();
@@ -2849,43 +3289,52 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.lineWidth = 2.2;
 
         if (proj.weaponId === 'drone' || proj.weaponId === 'rpg') {
-          const scale = proj.weaponId === 'rpg' ? 1.35 : 1.0;
+          const scale = proj.weaponId === 'rpg' ? 1.38 : 1.05;
           ctx.scale(scale, scale);
 
-          ctx.fillStyle = '#f97316';
+          // Llama propulsora de doble capa
+          ctx.fillStyle = '#ef4444';
           ctx.beginPath();
-          ctx.moveTo(-8, -3);
-          ctx.lineTo(-16 - Math.random() * 5, 0);
-          ctx.lineTo(-8, 3);
+          ctx.moveTo(-8, -3.8);
+          ctx.lineTo(-19 - Math.random() * 6, 0);
+          ctx.lineTo(-8, 3.8);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.fillStyle = '#fef08a';
+          ctx.beginPath();
+          ctx.moveTo(-8, -2);
+          ctx.lineTo(-13 - Math.random() * 4, 0);
+          ctx.lineTo(-8, 2);
           ctx.closePath();
           ctx.fill();
 
           ctx.fillStyle = proj.isEvo ? '#fde047' : '#f8fafc';
           ctx.beginPath();
-          ctx.roundRect(-8, -4, 14, 8, 2);
+          ctx.roundRect(-8, -4.2, 14, 8.4, 2.5);
           ctx.fill();
           ctx.stroke();
 
           ctx.fillStyle = proj.isEvo && proj.weaponId === 'rpg' ? '#3b82f6' : '#ef4444';
           ctx.beginPath();
-          ctx.moveTo(12, 0);
-          ctx.lineTo(5, -4.5);
-          ctx.lineTo(5, 4.5);
+          ctx.moveTo(12.5, 0);
+          ctx.lineTo(5, -4.8);
+          ctx.lineTo(5, 4.8);
           ctx.closePath();
           ctx.fill();
           ctx.stroke();
 
           ctx.fillStyle = '#475569';
-          ctx.fillRect(-9, -6, 4, 2.5);
-          ctx.fillRect(-9, 3.5, 4, 2.5);
+          ctx.fillRect(-9, -6.2, 4.2, 2.6);
+          ctx.fillRect(-9, 3.6, 4.2, 2.6);
         } else if (proj.weaponId === 'kunai') {
           if (proj.isEvo) {
             ctx.fillStyle = '#ef4444';
             ctx.beginPath();
             for (let s = 0; s < 4; s++) {
               const a = (s * Math.PI) / 2;
-              ctx.lineTo(Math.cos(a) * 13, Math.sin(a) * 13);
-              ctx.lineTo(Math.cos(a + 0.4) * 5, Math.sin(a + 0.4) * 5);
+              ctx.lineTo(Math.cos(a) * 14, Math.sin(a) * 14);
+              ctx.lineTo(Math.cos(a + 0.4) * 5.5, Math.sin(a + 0.4) * 5.5);
             }
             ctx.closePath();
             ctx.fill();
@@ -2893,15 +3342,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           } else {
             ctx.fillStyle = '#e2e8f0';
             ctx.beginPath();
-            ctx.moveTo(12, 0);
-            ctx.lineTo(-4, -5);
+            ctx.moveTo(13, 0);
+            ctx.lineTo(-4, -5.5);
             ctx.lineTo(-1, 0);
-            ctx.lineTo(-4, 5);
+            ctx.lineTo(-4, 5.5);
             ctx.closePath();
             ctx.fill();
             ctx.stroke();
             ctx.beginPath();
-            ctx.arc(-7, 0, 2.5, 0, Math.PI * 2);
+            ctx.arc(-7, 0, 2.6, 0, Math.PI * 2);
             ctx.stroke();
           }
         } else if (proj.weaponId === 'soccer') {
@@ -2917,9 +3366,9 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         } else if (proj.weaponId === 'boomerang' || proj.weaponId === 'reaper_scythe') {
           ctx.fillStyle = proj.color;
           ctx.beginPath();
-          ctx.moveTo(-12, -14);
-          ctx.lineTo(12, 0);
-          ctx.lineTo(-12, 14);
+          ctx.moveTo(-13, -15);
+          ctx.lineTo(13, 0);
+          ctx.lineTo(-13, 15);
           ctx.lineTo(-3, 0);
           ctx.closePath();
           ctx.fill();
@@ -2927,49 +3376,86 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         } else if (proj.weaponId === 'drill' || proj.weaponId === 'railgun') {
           ctx.fillStyle = proj.color;
           ctx.beginPath();
-          ctx.moveTo(16, 0);
-          ctx.lineTo(-10, -6);
+          ctx.moveTo(18, 0);
+          ctx.lineTo(-11, -6.5);
           ctx.lineTo(-5, 0);
-          ctx.lineTo(-10, 6);
+          ctx.lineTo(-11, 6.5);
           ctx.closePath();
           ctx.fill();
           ctx.stroke();
         } else if (proj.weaponId === 'katana') {
           ctx.strokeStyle = proj.color;
-          ctx.lineWidth = 6;
+          ctx.lineWidth = 7;
           ctx.beginPath();
-          ctx.arc(0, 0, proj.radius, -0.85, 0.85);
+          ctx.arc(0, 0, proj.radius, -0.88, 0.88);
+          ctx.stroke();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc(0, 0, proj.radius - 2, -0.75, 0.75);
           ctx.stroke();
         } else {
           ctx.fillStyle = proj.color;
           ctx.beginPath();
-          ctx.arc(0, 0, proj.radius * 0.75, 0, Math.PI * 2);
+          ctx.arc(0, 0, proj.radius * 0.8, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(0, 0, proj.radius * 0.35, 0, Math.PI * 2);
+          ctx.fill();
         }
         ctx.restore();
       }
 
+      // 11. PARTÍCULAS DE IMPACTO Y CHISPAS LUMINOSAS
+      for (const pt of particlesRef.current) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, pt.life / pt.maxLife);
+        ctx.fillStyle = pt.color;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, pt.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 12. ONDAS DE EXPLOSIÓN CON DOBLE ANILLO Y NÚCLEO INCANDESCENTE
       for (const exp of explosionsRef.current) {
         ctx.save();
-        ctx.globalAlpha = exp.life / exp.maxLife;
-        ctx.strokeStyle = exp.color;
-        ctx.lineWidth = 4;
-        ctx.fillStyle = `${exp.color}44`;
+        const alpha = Math.max(0, exp.life / exp.maxLife);
+        ctx.globalAlpha = alpha;
+        const expGrad = ctx.createRadialGradient(
+          exp.x,
+          exp.y,
+          2,
+          exp.x,
+          exp.y,
+          Math.max(4, exp.radius)
+        );
+        expGrad.addColorStop(0, '#ffffff');
+        expGrad.addColorStop(0.4, exp.color);
+        expGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = expGrad;
         ctx.beginPath();
         ctx.arc(exp.x, exp.y, exp.radius, 0, Math.PI * 2);
         ctx.fill();
+
+        ctx.strokeStyle = exp.color;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(exp.x, exp.y, exp.radius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
       }
 
+      // 13. RAYOS ELÉCTRICOS Y BARRIDOS LÁSER ORBITALES
       for (const bolt of lightningsRef.current) {
         ctx.save();
         ctx.globalAlpha = bolt.life / bolt.maxLife;
         if (bolt.isLaserSweep) {
           const offset = (1 - bolt.life / bolt.maxLife) * 65;
           ctx.strokeStyle = bolt.color;
-          ctx.lineWidth = bolt.isEvo ? 8 : 5;
+          ctx.lineWidth = bolt.isEvo ? 9 : 6;
           ctx.beginPath();
           ctx.moveTo(bolt.x - bolt.radius, bolt.y - 65 + offset);
           ctx.lineTo(bolt.x + bolt.radius, bolt.y - 65 + offset);
@@ -2978,12 +3464,16 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           ctx.stroke();
         } else {
           ctx.strokeStyle = bolt.color;
-          ctx.lineWidth = bolt.isEvo ? 6 : 4;
+          ctx.lineWidth = bolt.isEvo ? 7 : 4.5;
           ctx.beginPath();
-          ctx.moveTo(bolt.x - 12, bolt.y - 320);
-          ctx.lineTo(bolt.x + 10, bolt.y - 180);
-          ctx.lineTo(bolt.x - 8, bolt.y - 90);
+          ctx.moveTo(bolt.x - 14, bolt.y - 320);
+          ctx.lineTo(bolt.x + 12, bolt.y - 180);
+          ctx.lineTo(bolt.x - 9, bolt.y - 90);
           ctx.lineTo(bolt.x, bolt.y);
+          ctx.stroke();
+
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
           ctx.stroke();
 
           ctx.beginPath();
@@ -2995,6 +3485,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       }
 
+      // 14. NÚMEROS DE DAÑO FLOTANTES CON BORDE GRUESO
       for (const pop of popupsRef.current) {
         ctx.save();
         ctx.translate(pop.x, pop.y);
@@ -3010,6 +3501,23 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       }
 
       ctx.restore();
+
+      // 15. VIÑETA CINEMATOGRÁFICA Y FLASH ROJO AL RECIBIR DAÑO
+      const vignette = ctx.createRadialGradient(
+        viewW / 2,
+        viewH / 2,
+        Math.min(viewW, viewH) * 0.35,
+        viewW / 2,
+        viewH / 2,
+        Math.max(viewW, viewH) * 0.75
+      );
+      vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      vignette.addColorStop(
+        1,
+        p.hurtFlash > 0 ? 'rgba(220, 38, 38, 0.48)' : 'rgba(2, 6, 23, 0.38)'
+      );
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, viewW, viewH);
 
       const drawEdgeIndicator = (
         targetX: number,

@@ -1,4 +1,12 @@
-import { PassiveId, WeaponId } from '../data/gameCatalog';
+import {
+  EquipSlotKey,
+  MAX_ITEM_LEVEL,
+  PassiveId,
+  WEAPONS_CATALOG,
+  WeaponId,
+} from '../data/gameCatalog';
+
+export type EquippedLoadout = Record<EquipSlotKey, WeaponId | null>;
 
 export interface PersistentSaveData {
   version: number;
@@ -15,8 +23,9 @@ export interface PersistentSaveData {
   totalKills: number;
   bossesDefeated: number;
   playTimeSeconds: number;
-  weapons: Partial<Record<WeaponId, number>>; // 1..5 = Estrellas Amarillas, 6 = EVO Estrella Roja, 7+ = EVO Maestro (+1, +2...)
-  passives: Partial<Record<PassiveId, number>>; // 1..5+ = Niveles de suministro pasivo
+  weapons: Partial<Record<WeaponId, number>>; // 1..9 = Niveles, 10 = NV.10 ★ EVO MÁX
+  equippedSlots: EquippedLoadout;
+  passives: Partial<Record<PassiveId, number>>; // 1..10 = Niveles de suministro pasivo
   permanentUpgrades: {
     atk: number;
     hp: number;
@@ -30,9 +39,84 @@ export interface PersistentSaveData {
 
 const SAVE_STORAGE_KEY = 'survivor_io_openworld_save_v1';
 
+export function getDefaultEquippedLoadout(): EquippedLoadout {
+  return {
+    rightHand: 'kunai',
+    leftHand: null,
+    leftShoulder: null,
+    rightShoulder: null,
+    helmet: 'helmet_visor',
+    body: 'forcefield',
+    companion1: 'drone',
+    companion2: null,
+  };
+}
+
+export function equipItemIntoLoadout(
+  loadout: EquippedLoadout,
+  itemId: WeaponId,
+  preferredSlot?: EquipSlotKey
+): EquippedLoadout {
+  const def = WEAPONS_CATALOG[itemId];
+  if (!def) return loadout;
+  const next = { ...loadout };
+
+  // Si ya está equipado en alguna ranura y no se pidió cambiar de ranura específica, mantenerlo
+  const existingEntry = (Object.keys(next) as EquipSlotKey[]).find((k) => next[k] === itemId);
+  if (existingEntry && !preferredSlot) {
+    return next;
+  }
+
+  // Si se indicó ranura preferida, limpiar si estaba en la otra ranura gemela y colocarlo
+  if (preferredSlot) {
+    if (existingEntry) next[existingEntry] = null;
+    next[preferredSlot] = itemId;
+    return next;
+  }
+
+  // Auto-equipar si hay ranura libre de su categoría; si no hay libre, equipar en la primera de su categoría
+  if (def.category === 'hand') {
+    if (!next.rightHand) next.rightHand = itemId;
+    else if (!next.leftHand) next.leftHand = itemId;
+  } else if (def.category === 'shoulder') {
+    if (!next.leftShoulder) next.leftShoulder = itemId;
+    else if (!next.rightShoulder) next.rightShoulder = itemId;
+  } else if (def.category === 'helmet') {
+    if (!next.helmet) next.helmet = itemId;
+  } else if (def.category === 'body') {
+    if (!next.body) next.body = itemId;
+  } else if (def.category === 'companion') {
+    if (!next.companion1) next.companion1 = itemId;
+    else if (!next.companion2) next.companion2 = itemId;
+  }
+
+  return next;
+}
+
+export function isItemEquipped(loadout: EquippedLoadout, itemId: WeaponId): EquipSlotKey | null {
+  for (const key of Object.keys(loadout) as EquipSlotKey[]) {
+    if (loadout[key] === itemId) return key;
+  }
+  return null;
+}
+
+export function getActiveEquippedLevels(
+  data: PersistentSaveData
+): Partial<Record<WeaponId, number>> {
+  const active: Partial<Record<WeaponId, number>> = {};
+  (Object.keys(data.equippedSlots) as EquipSlotKey[]).forEach((slotKey) => {
+    const wId = data.equippedSlots[slotKey];
+    if (wId) {
+      const lv = Math.min(MAX_ITEM_LEVEL, Math.max(1, data.weapons[wId] || 1));
+      active[wId] = lv;
+    }
+  });
+  return active;
+}
+
 export function getDefaultSaveData(): PersistentSaveData {
   return {
-    version: 2,
+    version: 3,
     heroName: 'Comandante Koga',
     selectedHeroId: 'survivor_alpha',
     unlockedHeroes: ['survivor_alpha'],
@@ -55,9 +139,11 @@ export function getDefaultSaveData(): PersistentSaveData {
     playTimeSeconds: 4,
     weapons: {
       kunai: 1,
+      helmet_visor: 1,
       forcefield: 1,
       drone: 1,
     },
+    equippedSlots: getDefaultEquippedLoadout(),
     passives: {
       scroll: 1,
     },
@@ -79,18 +165,37 @@ export function loadSaveData(): PersistentSaveData {
     if (!raw) return getDefaultSaveData();
     const parsed = JSON.parse(raw) as Partial<PersistentSaveData>;
     const def = getDefaultSaveData();
-    const mergedWeapons = {
+
+    const rawWeapons: Partial<Record<WeaponId, number>> = {
       ...def.weapons,
       ...(parsed.weapons || {}),
     };
-    if (!mergedWeapons.drone || mergedWeapons.drone < 1) {
-      mergedWeapons.drone = 1;
-    }
+    // Limitar todas las armas desbloqueadas al tope Nivel 10
+    const clampedWeapons: Partial<Record<WeaponId, number>> = {};
+    (Object.keys(rawWeapons) as WeaponId[]).forEach((k) => {
+      if (WEAPONS_CATALOG[k] && (rawWeapons[k] || 0) > 0) {
+        clampedWeapons[k] = Math.min(MAX_ITEM_LEVEL, rawWeapons[k] || 1);
+      }
+    });
+
+    let loadout: EquippedLoadout = {
+      ...def.equippedSlots,
+      ...(parsed.equippedSlots || {}),
+    };
+
+    // Asegurar que los ítems desbloqueados llenen las ranuras vacías válidas
+    (Object.keys(clampedWeapons) as WeaponId[]).forEach((wId) => {
+      if ((clampedWeapons[wId] || 0) > 0) {
+        loadout = equipItemIntoLoadout(loadout, wId);
+      }
+    });
+
     return {
       ...def,
       ...parsed,
-      version: 2,
-      weapons: mergedWeapons,
+      version: 3,
+      weapons: clampedWeapons,
+      equippedSlots: loadout,
       passives: {
         ...def.passives,
         ...(parsed.passives || {}),
@@ -130,20 +235,25 @@ export function getXpRequiredForLevel(level: number): number {
 export function formatWeaponTierLabel(level: number): {
   stars: number;
   isEvo: boolean;
-  masteryPlus: number;
+  isMax: boolean;
   badgeText: string;
 } {
   if (level <= 0) {
-    return { stars: 0, isEvo: false, masteryPlus: 0, badgeText: 'NUEVO' };
+    return { stars: 0, isEvo: false, isMax: false, badgeText: 'NUEVO' };
   }
-  if (level <= 5) {
-    return { stars: level, isEvo: false, masteryPlus: 0, badgeText: `NV.${level}` };
+  const clamped = Math.min(MAX_ITEM_LEVEL, level);
+  if (clamped < MAX_ITEM_LEVEL) {
+    return {
+      stars: clamped,
+      isEvo: false,
+      isMax: false,
+      badgeText: `NV.${clamped}/10`,
+    };
   }
-  const mastery = level - 6;
   return {
-    stars: 6,
+    stars: 10,
     isEvo: true,
-    masteryPlus: mastery,
-    badgeText: mastery > 0 ? `EVO +${mastery}` : 'EVO ★',
+    isMax: true,
+    badgeText: 'NV.10 ★ MÁX',
   };
 }

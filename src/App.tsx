@@ -1,12 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Pause,
   Play,
   Volume2,
   VolumeX,
   Compass,
-  Sparkles,
-  Shield,
   Skull,
   Lock,
   CheckCircle2,
@@ -16,10 +13,14 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import {
+  EquipSlotKey,
   HEROES_CATALOG,
+  ItemSlotCategory,
+  MAX_ITEM_LEVEL,
   PASSIVES_CATALOG,
   PERMANENT_UPGRADES,
   PassiveId,
+  SLOT_LABELS,
   WEAPONS_CATALOG,
   WORLDS,
   WeaponId,
@@ -27,9 +28,11 @@ import {
 } from './data/gameCatalog';
 import {
   PersistentSaveData,
+  equipItemIntoLoadout,
   formatWeaponTierLabel,
   getDefaultSaveData,
   getXpRequiredForLevel,
+  isItemEquipped,
   loadSaveData,
   saveGameData,
 } from './utils/saveState';
@@ -38,13 +41,15 @@ import { soundEngine } from './utils/soundEngine';
 
 declare const __BUILD_TIMESTAMP__: string | undefined;
 
-const FALLBACK_TIMESTAMP = '08:26 PM - 11/08/2026';
+const FALLBACK_TIMESTAMP = '08:35 PM - 11/08/2026';
 
 interface UpgradeOption {
   kind: 'weapon' | 'passive';
   id: WeaponId | PassiveId;
   nextLevel: number;
   isEvoUnlock: boolean;
+  isNewUnlock: boolean;
+  categoryLabel?: string;
   title: string;
   subtitle: string;
   description: string;
@@ -52,6 +57,53 @@ interface UpgradeOption {
   accentColor: string;
   pairLabel?: string;
 }
+
+const ORDERED_SLOTS: EquipSlotKey[] = [
+  'leftHand',
+  'rightHand',
+  'leftShoulder',
+  'rightShoulder',
+  'helmet',
+  'body',
+  'companion1',
+  'companion2',
+];
+
+const CATEGORY_INFO: Record<
+  ItemSlotCategory,
+  { label: string; shortLabel: string; icon: string; badgeClass: string }
+> = {
+  hand: {
+    label: 'Armas de Mano (Máx 2: Izq / Der)',
+    shortLabel: 'Mano',
+    icon: '✋',
+    badgeClass: 'bg-amber-500/20 border-amber-400 text-amber-300',
+  },
+  shoulder: {
+    label: 'Armas de Hombro (Máx 2: Izq / Der)',
+    shortLabel: 'Hombro',
+    icon: '🚀',
+    badgeClass: 'bg-rose-500/20 border-rose-400 text-rose-300',
+  },
+  helmet: {
+    label: 'Armadura: Casco (Máx 1)',
+    shortLabel: 'Casco',
+    icon: '🪖',
+    badgeClass: 'bg-cyan-500/20 border-cyan-400 text-cyan-300',
+  },
+  body: {
+    label: 'Armadura: Cuerpo (Máx 1)',
+    shortLabel: 'Cuerpo',
+    icon: '🛡️',
+    badgeClass: 'bg-emerald-500/20 border-emerald-400 text-emerald-300',
+  },
+  companion: {
+    label: 'Acompañantes (Máx 2)',
+    shortLabel: 'Acompañante',
+    icon: '🤖',
+    badgeClass: 'bg-purple-500/20 border-purple-400 text-purple-300',
+  },
+};
 
 export default function App() {
   const buildTimestamp =
@@ -72,6 +124,7 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<
     null | 'pause_arsenal' | 'level_up' | 'rainbow_chest' | 'portals' | 'shop' | 'heroes'
   >(null);
+  const [arsenalCategoryFilter, setArsenalCategoryFilter] = useState<'all' | ItemSlotCategory>('all');
   const [pendingLevelUps, setPendingLevelUps] = useState<number>(0);
   const [levelUpOptions, setLevelUpOptions] = useState<UpgradeOption[]>([]);
   const [chestRewards, setChestRewards] = useState<{
@@ -121,73 +174,143 @@ export default function App() {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  // Generador de 3 opciones de mejora al subir de nivel (priorizando EVOs disponibles)
+  // Generador de 3 opciones de mejora al subir de nivel:
+  // - Nivel máximo de cada arma/equipo: 10 (MAX_ITEM_LEVEL = 10). Al llegar a 10 ya no sale para mejorar.
+  // - A medida que tus armas suben de nivel (o llegan a Nv.5 / Nv.10) y tu personaje sube de nivel, empiezan a aparecer armas nuevas.
   const buildUpgradePool = useCallback((data: PersistentSaveData): UpgradeOption[] => {
     const pool: UpgradeOption[] = [];
+
+    // Calcular nivel máximo alcanzado en cada categoría para desbloquear armas nuevas progresivamente
+    const maxLevelByCat: Record<ItemSlotCategory, number> = {
+      hand: 0,
+      shoulder: 0,
+      helmet: 0,
+      body: 0,
+      companion: 0,
+    };
+    let totalMaxedItems = 0;
+
+    (Object.keys(WEAPONS_CATALOG) as WeaponId[]).forEach((wId) => {
+      const lv = data.weapons[wId] || 0;
+      const cat = WEAPONS_CATALOG[wId].category;
+      if (lv > maxLevelByCat[cat]) maxLevelByCat[cat] = lv;
+      if (lv >= MAX_ITEM_LEVEL) totalMaxedItems += 1;
+    });
 
     (Object.keys(WEAPONS_CATALOG) as WeaponId[]).forEach((wId) => {
       const def = WEAPONS_CATALOG[wId];
       const currentLv = data.weapons[wId] || 0;
-      const passiveLv = data.passives[def.requiredPassive] || 0;
+
+      // Tope estricto en Nivel 10
+      if (currentLv >= MAX_ITEM_LEVEL) return;
+
+      // ¿Puede aparecer esta arma nueva?
+      // Aparece si ya la tienes (currentLv > 0), o si tu nivel de jugador cumple minPlayerLevel,
+      // o si ya subiste un arma de esa categoría a Nv.5+ / Nv.10 (lo que adelanta la aparición de armas nuevas).
+      const effectiveUnlockLevel = Math.max(
+        1,
+        def.minPlayerLevel - totalMaxedItems * 2 - (maxLevelByCat[def.category] >= 6 ? 2 : 0)
+      );
+      if (currentLv === 0 && data.level < effectiveUnlockLevel) {
+        return;
+      }
+
       const nextLv = currentLv + 1;
-
-      // Para evolucionar al Nivel 6 (EVO Estrella Roja), requiere tener la pasiva asociada (o si ya está en 6+, sube Maestría infinita)
-      const isEvoStep = currentLv === 5;
-      const canEvo = !isEvoStep || passiveLv >= 1;
-      const effectiveNextLv = isEvoStep && !canEvo ? 5 : nextLv;
-      const isEvoUnlock = isEvoStep && canEvo;
-
+      const isEvoUnlock = nextLv === MAX_ITEM_LEVEL;
+      const isEvoAppearance = nextLv >= 6;
       const passiveDef = PASSIVES_CATALOG[def.requiredPassive];
+      const catMeta = CATEGORY_INFO[def.category];
+      const equippedSlot = isItemEquipped(data.equippedSlots, wId);
+
       pool.push({
         kind: 'weapon',
         id: wId,
-        nextLevel: effectiveNextLv,
+        nextLevel: nextLv,
         isEvoUnlock,
-        title: isEvoUnlock || effectiveNextLv >= 6 ? def.evoName : def.name,
+        isNewUnlock: currentLv === 0,
+        categoryLabel: `${catMeta.icon} ${catMeta.shortLabel}${
+          equippedSlot ? ` · En ${SLOT_LABELS[equippedSlot].short}` : ''
+        }`,
+        title: isEvoAppearance ? def.evoName : def.name,
         subtitle: isEvoUnlock
-          ? '¡EVOLUCIÓN SUPREMA EVO ★!'
-          : effectiveNextLv > 6
-          ? `Maestría EVO +${effectiveNextLv - 6}`
+          ? '¡NIVEL 10 ★ MÁXIMO!'
           : currentLv === 0
-          ? 'Nueva Arma Activa'
-          : `Mejorar a Nivel ${effectiveNextLv}`,
-        description: isEvoUnlock || effectiveNextLv >= 6 ? def.evoDescription : def.description,
-        icon: isEvoUnlock || effectiveNextLv >= 6 ? def.evoIcon : def.icon,
-        accentColor: isEvoUnlock || effectiveNextLv >= 6 ? def.evoColor : def.color,
-        pairLabel: `EVO con: ${passiveDef.icon} ${passiveDef.name}`,
+          ? `¡NUEVO! (${catMeta.shortLabel} Nv.1/10)`
+          : `Subir a Nv.${nextLv}/${MAX_ITEM_LEVEL}`,
+        description: isEvoAppearance ? def.evoDescription : def.description,
+        icon: isEvoAppearance ? def.evoIcon : def.icon,
+        accentColor: isEvoAppearance ? def.evoColor : def.color,
+        pairLabel: `Sinergia: ${passiveDef.icon} ${passiveDef.name}`,
       });
     });
 
     (Object.keys(PASSIVES_CATALOG) as PassiveId[]).forEach((pId) => {
       const def = PASSIVES_CATALOG[pId];
       const currentLv = data.passives[pId] || 0;
+      if (currentLv >= MAX_ITEM_LEVEL) return;
+
       const nextLv = currentLv + 1;
       const weaponDef = WEAPONS_CATALOG[def.pairsWithWeapon];
       pool.push({
         kind: 'passive',
         id: pId,
         nextLevel: nextLv,
-        isEvoUnlock: false,
+        isEvoUnlock: nextLv === MAX_ITEM_LEVEL,
+        isNewUnlock: currentLv === 0,
+        categoryLabel: '⚡ Pasiva Permanente',
         title: def.name,
-        subtitle: currentLv === 0 ? 'Nuevo Suministro Pasivo' : `Nivel ${nextLv} (${def.statPerLevel})`,
+        subtitle:
+          currentLv === 0
+            ? 'Nuevo Suministro (Nv.1/10)'
+            : `Nv.${nextLv}/${MAX_ITEM_LEVEL} (${def.statPerLevel})`,
         description: def.description,
         icon: def.icon,
         accentColor: def.color,
-        pairLabel: `Evoluciona: ${weaponDef.icon} ${weaponDef.name}`,
+        pairLabel: `Potencia: ${weaponDef.icon} ${weaponDef.name}`,
       });
     });
 
-    // Mezclar pero dar prioridad a EVOs listas
-    const evoReady = pool.filter((o) => o.isEvoUnlock);
-    const others = pool.filter((o) => !o.isEvoUnlock).sort(() => Math.random() - 0.5);
-    return [...evoReady, ...others].slice(0, 3);
+    // Priorizar:
+    // 1. Armas equipadas que están a punto de llegar a Nv.10 (isEvoUnlock)
+    // 2. Armas equipadas que aún no llegan a Nv.10 + Armas NUEVAS que acaban de desbloquearse
+    const equippedUpgrades = pool.filter(
+      (o) => o.kind === 'weapon' && isItemEquipped(data.equippedSlots, o.id as WeaponId) !== null
+    );
+    const newWeaponUnlocks = pool.filter((o) => o.kind === 'weapon' && o.isNewUnlock);
+    const otherOptions = pool.filter(
+      (o) => !equippedUpgrades.includes(o) && !newWeaponUnlocks.includes(o)
+    );
+
+    const shuffledEquipped = [...equippedUpgrades].sort(() => Math.random() - 0.5);
+    const shuffledNew = [...newWeaponUnlocks].sort(() => Math.random() - 0.5);
+    const shuffledOthers = [...otherOptions].sort(() => Math.random() - 0.5);
+
+    const selected: UpgradeOption[] = [];
+    // Garantizar variedad: hasta 2 mejoras de lo equipado, al menos 1 arma nueva si hay disponible
+    if (shuffledEquipped.length > 0) selected.push(shuffledEquipped[0]);
+    if (shuffledNew.length > 0) selected.push(shuffledNew[0]);
+    if (shuffledEquipped.length > 1 && selected.length < 3) selected.push(shuffledEquipped[1]);
+
+    for (const candidate of [...shuffledNew.slice(1), ...shuffledOthers, ...shuffledEquipped.slice(2)]) {
+      if (selected.length >= 3) break;
+      if (!selected.includes(candidate)) {
+        selected.push(candidate);
+      }
+    }
+
+    return selected.slice(0, 3);
   }, []);
 
   // Cuando hay subidas de nivel pendientes y no hay otro modal abierto, mostrar selector de cartas
   useEffect(() => {
     if (pendingLevelUps > 0 && activeModal === null) {
-      setLevelUpOptions(buildUpgradePool(saveData));
-      setActiveModal('level_up');
+      const opts = buildUpgradePool(saveData);
+      if (opts.length > 0) {
+        setLevelUpOptions(opts);
+        setActiveModal('level_up');
+      } else {
+        setPendingLevelUps(0);
+      }
     }
   }, [pendingLevelUps, activeModal, saveData, buildUpgradePool]);
 
@@ -197,15 +320,18 @@ export default function App() {
       const updated = { ...prev };
       if (opt.kind === 'weapon') {
         const wId = opt.id as WeaponId;
+        const nextLv = Math.min(MAX_ITEM_LEVEL, (prev.weapons[wId] || 0) + 1);
         updated.weapons = {
           ...prev.weapons,
-          [wId]: (prev.weapons[wId] || 0) + 1,
+          [wId]: nextLv,
         };
+        // Si el jugador elige un arma en el selector de nivel, se equipa automáticamente en la ranura libre de su categoría (o reemplaza la de su categoría)
+        updated.equippedSlots = equipItemIntoLoadout(prev.equippedSlots, wId);
       } else {
         const pId = opt.id as PassiveId;
         updated.passives = {
           ...prev.passives,
-          [pId]: (prev.passives[pId] || 0) + 1,
+          [pId]: Math.min(MAX_ITEM_LEVEL, (prev.passives[pId] || 0) + 1),
         };
       }
       return updated;
@@ -249,21 +375,35 @@ export default function App() {
     []
   );
 
-  // Abrir el Cofre con Estela Arcoíris (otorga 3 mejoras directas + Oro)
+  // Abrir el Cofre con Estela Arcoíris (otorga hasta 3 mejoras directas hasta Nv.10 + Oro)
   const handleOpenRainbowChest = useCallback(() => {
     setSaveData((prev) => {
       const rewards = buildUpgradePool(prev);
       const bonusGold = Math.round(120 * currentWorld.goldMultiplier);
       const nextWeapons = { ...prev.weapons };
       const nextPassives = { ...prev.passives };
+      let nextSlots = { ...prev.equippedSlots };
 
       rewards.forEach((r) => {
         if (r.kind === 'weapon') {
           const wId = r.id as WeaponId;
-          nextWeapons[wId] = (nextWeapons[wId] || 0) + 1;
+          nextWeapons[wId] = Math.min(MAX_ITEM_LEVEL, (nextWeapons[wId] || 0) + 1);
+          // Auto-equipar solo si hay ranura vacía de esa categoría
+          const cat = WEAPONS_CATALOG[wId].category;
+          if (cat === 'hand' && (!nextSlots.leftHand || !nextSlots.rightHand)) {
+            nextSlots = equipItemIntoLoadout(nextSlots, wId);
+          } else if (cat === 'shoulder' && (!nextSlots.leftShoulder || !nextSlots.rightShoulder)) {
+            nextSlots = equipItemIntoLoadout(nextSlots, wId);
+          } else if (cat === 'helmet' && !nextSlots.helmet) {
+            nextSlots = equipItemIntoLoadout(nextSlots, wId);
+          } else if (cat === 'body' && !nextSlots.body) {
+            nextSlots = equipItemIntoLoadout(nextSlots, wId);
+          } else if (cat === 'companion' && (!nextSlots.companion1 || !nextSlots.companion2)) {
+            nextSlots = equipItemIntoLoadout(nextSlots, wId);
+          }
         } else {
           const pId = r.id as PassiveId;
-          nextPassives[pId] = (nextPassives[pId] || 0) + 1;
+          nextPassives[pId] = Math.min(MAX_ITEM_LEVEL, (nextPassives[pId] || 0) + 1);
         }
       });
 
@@ -275,6 +415,7 @@ export default function App() {
         gold: prev.gold + bonusGold,
         weapons: nextWeapons,
         passives: nextPassives,
+        equippedSlots: nextSlots,
       };
     });
   }, [buildUpgradePool, currentWorld.goldMultiplier]);
@@ -339,24 +480,42 @@ export default function App() {
     }));
   };
 
-  // Mejorar un arma directamente con Oro desde el Arsenal
+  // Mejorar un arma/equipo directamente con Oro desde el Arsenal (tope Nivel 10)
   const handleDirectWeaponUpgradeWithGold = (wId: WeaponId) => {
     const currentLv = saveData.weapons[wId] || 0;
+    if (currentLv >= MAX_ITEM_LEVEL) return;
     const def = WEAPONS_CATALOG[wId];
-    const cost = currentLv === 0 ? 45 : Math.round(75 * Math.pow(1.38, currentLv));
+    const cost = currentLv === 0 ? 55 : Math.round(70 * Math.pow(1.34, currentLv));
     if (saveData.gold < cost) return;
     soundEngine.playLevelUp();
+    setSaveData((prev) => {
+      const nextLv = Math.min(MAX_ITEM_LEVEL, currentLv + 1);
+      // Si la acaba de desbloquear (currentLv === 0), equiparla automáticamente si hay hueco o en su categoría
+      const nextEquipped =
+        currentLv === 0 ? equipItemIntoLoadout(prev.equippedSlots, wId) : prev.equippedSlots;
+      return {
+        ...prev,
+        gold: prev.gold - cost,
+        weapons: {
+          ...prev.weapons,
+          [wId]: nextLv,
+        },
+        passives: {
+          ...prev.passives,
+          [def.requiredPassive]: Math.max(1, prev.passives[def.requiredPassive] || 0),
+        },
+        equippedSlots: nextEquipped,
+      };
+    });
+  };
+
+  // Equipar un arma desbloqueada en una ranura específica (Mano Izq, Mano Der, Hombro Izq, Hombro Der, Casco, Cuerpo, Acomp 1, Acomp 2)
+  const handleEquipInSlot = (wId: WeaponId, preferredSlot?: EquipSlotKey) => {
+    if ((saveData.weapons[wId] || 0) <= 0) return;
+    soundEngine.playCoinPickup();
     setSaveData((prev) => ({
       ...prev,
-      gold: prev.gold - cost,
-      weapons: {
-        ...prev.weapons,
-        [wId]: currentLv + 1,
-      },
-      passives: {
-        ...prev.passives,
-        [def.requiredPassive]: Math.max(1, prev.passives[def.requiredPassive] || 0),
-      },
+      equippedSlots: equipItemIntoLoadout(prev.equippedSlots, wId, preferredSlot),
     }));
   };
 
@@ -393,13 +552,13 @@ export default function App() {
               🗡️
             </div>
             <span className="text-[11px] uppercase tracking-widest text-emerald-400 font-extrabold">
-              Mundo Abierto · Auto-Save · Evolución EVO
+              Mundo Abierto · 8 Ranuras · Nv.10 Máx
             </span>
             <h1 className="font-survivor text-3xl text-white mt-1 text-stroke-md tracking-wide">
               SURVIVOR.IO MOBILE
             </h1>
             <p className="text-xs text-slate-300 mt-1">
-              Acceso Privado · Tu personaje conserva todas sus mejoras y posición automáticamente
+              Acceso Privado · 2 Manos, 2 Hombros, Casco + Cuerpo y 2 Acompañantes
             </p>
           </div>
 
@@ -465,13 +624,15 @@ export default function App() {
         <div className="absolute top-0 left-0 right-0 z-20 pt-2 px-2.5 pointer-events-none">
           {/* Fila 1: Botón Pausa [||] · Cronómetro 00:04 · Contadores de Monedas y Calaveras */}
           <div className="flex items-start justify-between mb-1.5">
-            {/* Botón Pausa gris/metálico con dos barras verticales blancas igual a la captura */}
             <div className="flex items-center gap-1.5 pointer-events-auto">
               <button
                 type="button"
-                onClick={() => setActiveModal('pause_arsenal')}
+                onClick={() => {
+                  setArsenalCategoryFilter('all');
+                  setActiveModal('pause_arsenal');
+                }}
                 className="w-12 h-10 rounded-lg bg-gradient-to-b from-slate-500 to-slate-700 survivor-btn flex items-center justify-center cursor-pointer"
-                title="Pausa y Arsenal"
+                title="Pausa y Equipamiento"
               >
                 <div className="flex items-center gap-1.5">
                   <span className="w-2 h-5 bg-white border border-black rounded-[1px]" />
@@ -485,7 +646,11 @@ export default function App() {
                 className="w-9 h-9 rounded-lg bg-slate-800/90 border-2 border-black shadow-[0_3px_0_#000] flex items-center justify-center text-white cursor-pointer"
                 title="Sonido"
               >
-                {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+                {isMuted ? (
+                  <VolumeX className="w-4 h-4 text-red-400" />
+                ) : (
+                  <Volume2 className="w-4 h-4 text-emerald-400" />
+                )}
               </button>
             </div>
 
@@ -513,7 +678,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Derecha: Pastilla de Monedas (arriba) y Pastilla de Calavera/Bajas (abajo) exactas a la foto */}
+            {/* Derecha: Pastilla de Monedas (arriba) y Pastilla de Calavera/Bajas (abajo) */}
             <div className="flex flex-col gap-1 items-end pointer-events-auto">
               <button
                 type="button"
@@ -539,7 +704,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Fila 2: Barra de Experiencia completa de lado a lado + Etiqueta Trapezoidal "LV.1" a la izquierda */}
+          {/* Fila 2: Barra de Experiencia completa de lado a lado + Etiqueta Trapezoidal "LV.1" */}
           <div className="relative w-full">
             <div className="w-full h-7 bg-slate-800/95 border-[3px] border-black rounded-sm overflow-hidden shadow-[0_3px_0_#000]">
               <div
@@ -548,55 +713,70 @@ export default function App() {
               />
             </div>
 
-            {/* Etiqueta negra "LV.1" colgando a la izquierda exactamente como en la captura */}
-            <div className="inline-flex items-center bg-black text-white font-survivor text-sm px-3 py-0.5 rounded-b-md border-x-2 border-b-2 border-black shadow-md">
-              LV.{saveData.level}
-              <span className="ml-2 text-[10px] font-sans font-bold text-emerald-300">
-                ({xpProgressPct}%)
-              </span>
+            <div className="flex items-center justify-between">
+              <div className="inline-flex items-center bg-black text-white font-survivor text-sm px-3 py-0.5 rounded-b-md border-x-2 border-b-2 border-black shadow-md">
+                LV.{saveData.level}
+                <span className="ml-2 text-[10px] font-sans font-bold text-emerald-300">
+                  ({xpProgressPct}%)
+                </span>
+              </div>
+
+              {/* Amenaza Enemiga y Coordenadas en el Mundo Abierto */}
+              <div className="flex items-center gap-1 mt-0.5">
+                <div className="bg-rose-950/90 border border-black px-2 py-0.5 rounded text-[10px] font-bold text-rose-200">
+                  💀 Dureza x
+                  {(
+                    currentWorld.enemyHpMultiplier *
+                    Math.pow(1.21, Math.min(35, saveData.level - 1)) *
+                    (1 + (saveData.level - 1) * 0.38)
+                  ).toFixed(1)}
+                </div>
+                <div className="bg-slate-950/80 border border-black px-2 py-0.5 rounded text-[10px] font-mono text-slate-200">
+                  X:{saveData.playerX} Y:{saveData.playerY}
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Fila 3: Mini-iconos de tus Armas Activas y Evoluciones EVO actuales */}
-          <div className="mt-1.5 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1 flex-wrap pointer-events-auto">
-              {(Object.keys(saveData.weapons) as WeaponId[]).map((wId) => {
-                const lv = saveData.weapons[wId] || 0;
-                if (lv <= 0) return null;
-                const def = WEAPONS_CATALOG[wId];
-                const tier = formatWeaponTierLabel(lv);
-                return (
-                  <button
-                    key={wId}
-                    type="button"
-                    onClick={() => setActiveModal('pause_arsenal')}
-                    className={`px-1.5 py-0.5 rounded-md border-2 border-black flex items-center gap-1 text-[11px] font-extrabold shadow-[0_2px_0_#000] cursor-pointer ${
-                      tier.isEvo
-                        ? 'bg-gradient-to-b from-red-500 to-rose-700 text-white'
-                        : 'bg-slate-800/95 text-white'
-                    }`}
-                  >
-                    <span>{tier.isEvo ? def.evoIcon : def.icon}</span>
-                    <span className="text-[10px] text-amber-300">{tier.badgeText}</span>
-                  </button>
-                );
-              })}
-            </div>
+          {/* Fila 3: Las 8 Ranuras de Equipamiento Activas del Personaje (2 Manos, 2 Hombros, Casco, Cuerpo, 2 Acompañantes) */}
+          <div className="mt-1 grid grid-cols-8 gap-1 pointer-events-auto">
+            {ORDERED_SLOTS.map((slotKey) => {
+              const slotMeta = SLOT_LABELS[slotKey];
+              const equippedId = saveData.equippedSlots[slotKey];
+              const lv = equippedId ? saveData.weapons[equippedId] || 0 : 0;
+              const def = equippedId ? WEAPONS_CATALOG[equippedId] : null;
+              const tier = formatWeaponTierLabel(lv);
 
-            {/* Amenaza Enemiga y Coordenadas en el Mundo Abierto */}
-            <div className="flex items-center gap-1">
-              <div className="bg-rose-950/90 border border-black px-2 py-0.5 rounded text-[10px] font-bold text-rose-200">
-                💀 Dureza x
-                {(
-                  currentWorld.enemyHpMultiplier *
-                  Math.pow(1.21, Math.min(35, saveData.level - 1)) *
-                  (1 + (saveData.level - 1) * 0.38)
-                ).toFixed(1)}
-              </div>
-              <div className="bg-slate-950/80 border border-black px-2 py-0.5 rounded text-[10px] font-mono text-slate-200">
-                X:{saveData.playerX} Y:{saveData.playerY}
-              </div>
-            </div>
+              return (
+                <button
+                  key={slotKey}
+                  type="button"
+                  onClick={() => {
+                    setArsenalCategoryFilter(slotMeta.category);
+                    setActiveModal('pause_arsenal');
+                  }}
+                  title={`${slotMeta.title}: ${def ? def.name : 'Vacío'}`}
+                  className={`py-0.5 px-1 rounded-md border-2 border-black flex flex-col items-center justify-center shadow-[0_2px_0_#000] cursor-pointer transition active:translate-y-0.5 ${
+                    !def
+                      ? 'bg-slate-900/75 text-slate-500 border-dashed'
+                      : tier.isMax
+                      ? 'bg-gradient-to-b from-amber-400 via-orange-500 to-red-600 text-white'
+                      : tier.isEvo
+                      ? 'bg-gradient-to-b from-red-500 to-rose-700 text-white'
+                      : 'bg-slate-800/95 text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-0.5 leading-none">
+                    <span className="text-xs">
+                      {def ? (tier.isEvo ? def.evoIcon : def.icon) : slotMeta.icon}
+                    </span>
+                  </div>
+                  <span className="text-[8px] font-extrabold tracking-tighter text-amber-200 leading-tight truncate max-w-full">
+                    {def ? `Nv.${lv}` : slotMeta.short.split(' ')[0]}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Barra de Vida de Jefe si hay un Boss activo en el mundo */}
@@ -647,7 +827,7 @@ export default function App() {
         )}
 
         {/* ====================================================================
-            BARRA INFERIOR DE ACCIONES RÁPIDAS MÓVILES (Portales, Arsenal, Tienda, Héroes, Jefe)
+            BARRA INFERIOR DE ACCIONES RÁPIDAS MÓVILES
            ==================================================================== */}
         <div className="absolute bottom-6 left-2.5 right-2.5 z-20 flex items-center justify-center gap-1.5 pointer-events-auto">
           <button
@@ -661,11 +841,14 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setActiveModal('pause_arsenal')}
-            className="flex-1 max-w-[105px] py-2 px-2 rounded-xl bg-gradient-to-b from-amber-400 to-orange-600 text-white font-survivor text-xs survivor-btn text-stroke-sm flex flex-col items-center justify-center cursor-pointer"
+            onClick={() => {
+              setArsenalCategoryFilter('all');
+              setActiveModal('pause_arsenal');
+            }}
+            className="flex-1 max-w-[115px] py-2 px-2 rounded-xl bg-gradient-to-b from-amber-400 to-orange-600 text-white font-survivor text-xs survivor-btn text-stroke-sm flex flex-col items-center justify-center cursor-pointer"
           >
             <Swords className="w-4 h-4 mb-0.5" />
-            <span>Armas EVO</span>
+            <span>Equipo (8)</span>
           </button>
 
           <button
@@ -697,20 +880,20 @@ export default function App() {
         </div>
 
         {/* ====================================================================
-            MODAL 1: SELECCIÓN DE HABILIDAD AL SUBIR DE NIVEL (ESTILO SURVIVOR.IO)
+            MODAL 1: SELECCIÓN DE HABILIDAD AL SUBIR DE NIVEL (TOPE NV.10 + NUEVAS ARMAS)
            ==================================================================== */}
         {activeModal === 'level_up' && (
           <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-slate-800 border-4 border-black rounded-3xl p-4 shadow-[0_8px_0_#000]">
               <div className="text-center mb-3">
                 <span className="inline-block px-3 py-0.5 rounded-full bg-amber-400 border-2 border-black text-black font-survivor text-xs uppercase">
-                  Nivel {saveData.level} Alcanzado
+                  Nivel {saveData.level} Alcanzado · Máx Nv.{MAX_ITEM_LEVEL}
                 </span>
                 <h2 className="font-survivor text-2xl sm:text-3xl text-white text-stroke-md mt-1">
-                  ¡SELECCIONA HABILIDAD!
+                  ¡ELIGE MEJORA O NUEVO EQUIPO!
                 </h2>
                 <p className="text-xs text-slate-300">
-                  Tus armas y mejoras se guardan permanentemente en tu personaje
+                  Límite activo: 2 Manos · 2 Hombros · Casco + Cuerpo · 2 Acompañantes
                 </p>
               </div>
 
@@ -723,6 +906,8 @@ export default function App() {
                     className={`w-full text-left p-3 rounded-2xl border-3 border-black shadow-[0_4px_0_#000] transition active:translate-y-1 flex items-center gap-3 cursor-pointer ${
                       opt.isEvoUnlock
                         ? 'bg-gradient-to-r from-red-600 via-rose-600 to-amber-500'
+                        : opt.isNewUnlock
+                        ? 'bg-gradient-to-r from-indigo-900 via-slate-800 to-sky-900'
                         : opt.kind === 'weapon'
                         ? 'bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700'
                         : 'bg-gradient-to-r from-emerald-900/90 to-slate-800 hover:from-emerald-800'
@@ -746,11 +931,18 @@ export default function App() {
                       <p className="text-xs text-slate-200 mt-0.5 line-clamp-2">
                         {opt.description}
                       </p>
-                      {opt.pairLabel && (
-                        <div className="mt-1 inline-flex items-center gap-1 bg-black/45 px-2 py-0.5 rounded text-[10px] font-bold text-amber-200">
-                          {opt.pairLabel}
-                        </div>
-                      )}
+                      <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                        {opt.categoryLabel && (
+                          <span className="inline-flex items-center gap-1 bg-sky-950/80 border border-sky-500/40 px-2 py-0.5 rounded text-[10px] font-bold text-sky-200">
+                            {opt.categoryLabel}
+                          </span>
+                        )}
+                        {opt.pairLabel && (
+                          <span className="inline-flex items-center gap-1 bg-black/45 px-2 py-0.5 rounded text-[10px] font-bold text-amber-200">
+                            {opt.pairLabel}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </button>
                 ))}
@@ -770,7 +962,7 @@ export default function App() {
                 ¡COFRE ARCOÍRIS ABIERTO!
               </h2>
               <p className="text-xs font-bold text-amber-100 mt-0.5 mb-3">
-                Has recibido +{chestRewards.bonusGold} Monedas de Oro y 3 Mejoras Directas:
+                Has recibido +{chestRewards.bonusGold} Monedas de Oro y {chestRewards.upgrades.length} Mejoras Directas:
               </p>
 
               <div className="space-y-2 text-left mb-4">
@@ -887,21 +1079,22 @@ export default function App() {
         )}
 
         {/* ====================================================================
-            MODAL 4: PAUSA / ARSENAL DE ARMAS Y EVOLUCIONES EVO
+            MODAL 4: EQUIPAMIENTO DE 8 RANURAS Y ARSENAL DE ARMAS (NIVEL 1 A 10)
            ==================================================================== */}
         {activeModal === 'pause_arsenal' && (
-          <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3">
-            <div className="w-full max-w-md max-h-[88dvh] bg-slate-900 border-4 border-black rounded-3xl p-4 shadow-[0_8px_0_#000] flex flex-col">
-              <div className="flex items-center justify-between mb-3 gap-2">
+          <div className="absolute inset-0 z-40 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2.5">
+            <div className="w-full max-w-md max-h-[92dvh] bg-slate-900 border-4 border-black rounded-3xl p-3.5 shadow-[0_8px_0_#000] flex flex-col">
+              {/* Encabezado */}
+              <div className="flex items-center justify-between mb-2 gap-2">
                 <div>
-                  <h2 className="font-survivor text-xl sm:text-2xl text-white text-stroke-md">
-                    🗡️ 14 ARMAS & EVOLUCIONES EVO
+                  <h2 className="font-survivor text-lg sm:text-xl text-white text-stroke-md leading-tight">
+                    🛡️ EQUIPO (8 RANURAS) & ARSENAL NV.10
                   </h2>
-                  <p className="text-xs text-slate-300">
-                    Oro: <span className="text-amber-400 font-bold">🪙 {saveData.gold.toLocaleString()}</span> · Desbloquea o evoluciona cualquier arma
+                  <p className="text-[11px] text-slate-300">
+                    Oro: <span className="text-amber-400 font-bold">🪙 {saveData.gold.toLocaleString()}</span> · Nivel Máximo por Arma: <span className="text-emerald-300 font-bold">Nv.10 ★</span>
                   </p>
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -909,10 +1102,10 @@ export default function App() {
                       setPendingLevelUps(0);
                       setSaveData(getDefaultSaveData());
                     }}
-                    className="px-2 py-1.5 rounded-xl bg-slate-700 text-slate-200 font-survivor text-[11px] survivor-btn cursor-pointer flex items-center gap-1"
+                    className="px-2 py-1.5 rounded-xl bg-slate-700 text-slate-200 font-survivor text-[10px] survivor-btn cursor-pointer flex items-center gap-1"
                     title="Reiniciar personaje a Nivel 1"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
+                    <RotateCcw className="w-3 h-3" />
                     <span>Nv.1</span>
                   </button>
                   <button
@@ -921,7 +1114,7 @@ export default function App() {
                       soundEngine.playCoinPickup();
                       setSaveData((prev) => ({ ...prev, gold: prev.gold + 500 }));
                     }}
-                    className="px-2.5 py-1.5 rounded-xl bg-amber-500 text-black font-survivor text-xs survivor-btn cursor-pointer"
+                    className="px-2 py-1.5 rounded-xl bg-amber-500 text-black font-survivor text-[11px] survivor-btn cursor-pointer"
                     title="Bono de suministros de oro"
                   >
                     +500 🪙
@@ -929,77 +1122,339 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setActiveModal(null)}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white font-survivor text-sm survivor-btn cursor-pointer"
+                    className="px-2.5 py-1.5 rounded-xl bg-emerald-500 text-white font-survivor text-xs survivor-btn cursor-pointer"
                   >
-                    SEGUIR ▶
+                    JUGAR ▶
                   </button>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                {(Object.keys(WEAPONS_CATALOG) as WeaponId[]).map((wId) => {
-                  const def = WEAPONS_CATALOG[wId];
-                  const lv = saveData.weapons[wId] || 0;
-                  const tier = formatWeaponTierLabel(lv);
-                  const passiveDef = PASSIVES_CATALOG[def.requiredPassive];
-                  const hasPassive = (saveData.passives[def.requiredPassive] || 0) > 0;
-                  const goldCost = lv === 0 ? 45 : Math.round(75 * Math.pow(1.38, lv));
+              {/* Panel Visual de las 8 Ranuras del Personaje */}
+              <div className="bg-slate-950/90 border-2 border-black rounded-2xl p-2 mb-2">
+                <div className="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Equipamiento Activo del Personaje (Toca para filtrar):</span>
+                  <span className="text-amber-300">Solo lo equipado dispara</span>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {ORDERED_SLOTS.map((slotKey) => {
+                    const slotMeta = SLOT_LABELS[slotKey];
+                    const wId = saveData.equippedSlots[slotKey];
+                    const def = wId ? WEAPONS_CATALOG[wId] : null;
+                    const lv = wId ? saveData.weapons[wId] || 0 : 0;
+                    const tier = formatWeaponTierLabel(lv);
+                    const isFilterActive = arsenalCategoryFilter === slotMeta.category;
 
-                  return (
-                    <div
-                      key={wId}
-                      className="p-2.5 rounded-2xl bg-slate-800 border-3 border-black shadow-[0_3px_0_#000] flex items-center justify-between gap-2.5"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                          className="w-11 h-11 rounded-xl border-2 border-black flex items-center justify-center text-2xl shrink-0"
-                          style={{ backgroundColor: tier.isEvo ? def.evoColor : def.color }}
-                        >
-                          {tier.isEvo ? def.evoIcon : def.icon}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-survivor text-sm text-white text-stroke-sm truncate">
-                              {tier.isEvo ? def.evoName : def.name}
-                            </span>
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-survivor ${
-                                tier.isEvo
-                                  ? 'bg-red-600 text-white'
-                                  : lv > 0
-                                  ? 'bg-amber-400 text-black'
-                                  : 'bg-slate-700 text-slate-300'
-                              }`}
-                            >
-                              {tier.badgeText}
-                            </span>
-                          </div>
-                          <div className="text-[10px] text-slate-300 truncate">
-                            {tier.isEvo ? def.evoDescription : def.description}
-                          </div>
-                          <div className="text-[10px] font-bold text-amber-300 mt-0.5">
-                            Pareja EVO: {passiveDef.icon} {passiveDef.name}{' '}
-                            {hasPassive ? '✓' : '(Falta)'}
-                          </div>
-                        </div>
-                      </div>
-
+                    return (
                       <button
+                        key={slotKey}
                         type="button"
-                        disabled={saveData.gold < goldCost}
-                        onClick={() => handleDirectWeaponUpgradeWithGold(wId)}
-                        className={`px-2.5 py-2 rounded-xl font-survivor text-xs survivor-btn shrink-0 cursor-pointer ${
-                          saveData.gold >= goldCost
-                            ? 'bg-gradient-to-b from-amber-400 to-orange-500 text-white text-stroke-sm'
-                            : 'bg-slate-700 text-slate-400 opacity-60 cursor-not-allowed'
+                        onClick={() =>
+                          setArsenalCategoryFilter(
+                            arsenalCategoryFilter === slotMeta.category ? 'all' : slotMeta.category
+                          )
+                        }
+                        className={`p-1.5 rounded-xl border-2 text-left flex flex-col justify-between transition cursor-pointer ${
+                          isFilterActive
+                            ? 'bg-slate-800 border-amber-400 ring-1 ring-amber-400'
+                            : 'bg-slate-900 border-black'
                         }`}
                       >
-                        <div>+1 NV</div>
-                        <div className="text-[10px]">🪙 {goldCost}</div>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[9px] font-extrabold text-slate-400 truncate">
+                            {slotMeta.short}
+                          </span>
+                          <span className="text-[9px] font-survivor text-amber-300">
+                            {def ? `Nv.${lv}/10` : 'Vacío'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 mt-1">
+                          <span className="text-base leading-none">
+                            {def ? (tier.isEvo ? def.evoIcon : def.icon) : slotMeta.icon}
+                          </span>
+                          <span className="text-[10px] font-bold text-white truncate">
+                            {def ? (tier.isEvo ? def.evoName : def.name) : 'Sin equipar'}
+                          </span>
+                        </div>
                       </button>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Pestañas de Categoría */}
+              <div className="flex items-center gap-1 overflow-x-auto pb-1.5 mb-1.5">
+                <button
+                  type="button"
+                  onClick={() => setArsenalCategoryFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg font-survivor text-[11px] border border-black shrink-0 cursor-pointer ${
+                    arsenalCategoryFilter === 'all'
+                      ? 'bg-amber-400 text-black'
+                      : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  Todos ({Object.keys(WEAPONS_CATALOG).length})
+                </button>
+                {(['hand', 'shoulder', 'helmet', 'body', 'companion'] as ItemSlotCategory[]).map(
+                  (cat) => {
+                    const info = CATEGORY_INFO[cat];
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setArsenalCategoryFilter(cat)}
+                        className={`px-2.5 py-1 rounded-lg font-survivor text-[11px] border border-black shrink-0 cursor-pointer flex items-center gap-1 ${
+                          arsenalCategoryFilter === cat
+                            ? 'bg-amber-400 text-black'
+                            : 'bg-slate-800 text-slate-300'
+                        }`}
+                      >
+                        <span>{info.icon}</span>
+                        <span>{info.shortLabel}</span>
+                      </button>
+                    );
+                  }
+                )}
+              </div>
+
+              {/* Lista de Armas y Equipo por Categoría (Nivel 1 a 10) */}
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                {(Object.keys(WEAPONS_CATALOG) as WeaponId[])
+                  .filter((wId) =>
+                    arsenalCategoryFilter === 'all'
+                      ? true
+                      : WEAPONS_CATALOG[wId].category === arsenalCategoryFilter
+                  )
+                  .map((wId) => {
+                    const def = WEAPONS_CATALOG[wId];
+                    const lv = saveData.weapons[wId] || 0;
+                    const isMaxed = lv >= MAX_ITEM_LEVEL;
+                    const tier = formatWeaponTierLabel(lv);
+                    const catInfo = CATEGORY_INFO[def.category];
+                    const equippedSlot = isItemEquipped(saveData.equippedSlots, wId);
+                    const goldCost = lv === 0 ? 55 : Math.round(70 * Math.pow(1.34, lv));
+                    const isLockedByPlayerLv = lv === 0 && saveData.level < def.minPlayerLevel;
+
+                    return (
+                      <div
+                        key={wId}
+                        className={`p-2.5 rounded-2xl border-3 border-black shadow-[0_3px_0_#000] flex flex-col gap-2 ${
+                          equippedSlot
+                            ? 'bg-slate-800 ring-2 ring-emerald-400'
+                            : 'bg-slate-800/90'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2.5">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className="w-11 h-11 rounded-xl border-2 border-black flex items-center justify-center text-2xl shrink-0"
+                              style={{ backgroundColor: tier.isEvo ? def.evoColor : def.color }}
+                            >
+                              {tier.isEvo ? def.evoIcon : def.icon}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-survivor text-sm text-white text-stroke-sm truncate">
+                                  {tier.isEvo ? def.evoName : def.name}
+                                </span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-survivor ${
+                                    isMaxed
+                                      ? 'bg-gradient-to-r from-amber-400 to-red-600 text-white'
+                                      : tier.isEvo
+                                      ? 'bg-red-600 text-white'
+                                      : lv > 0
+                                      ? 'bg-amber-400 text-black'
+                                      : 'bg-slate-700 text-slate-300'
+                                  }`}
+                                >
+                                  {tier.badgeText}
+                                </span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded border text-[9px] font-bold ${catInfo.badgeClass}`}
+                                >
+                                  {catInfo.icon} {catInfo.shortLabel}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-300 truncate mt-0.5">
+                                {tier.isEvo ? def.evoDescription : def.description}
+                              </div>
+                              {/* Barra visual de nivel 1 a 10 */}
+                              <div className="mt-1 flex items-center gap-1">
+                                <div className="flex-1 h-1.5 bg-slate-950 rounded-full overflow-hidden border border-black max-w-[130px]">
+                                  <div
+                                    className={`h-full ${
+                                      isMaxed
+                                        ? 'bg-gradient-to-r from-amber-400 via-orange-500 to-red-500'
+                                        : 'bg-emerald-400'
+                                    }`}
+                                    style={{ width: `${(lv / MAX_ITEM_LEVEL) * 100}%` }}
+                                  />
+                                </div>
+                                <span className="text-[9px] font-mono text-slate-300">
+                                  {lv}/{MAX_ITEM_LEVEL}
+                                </span>
+                                {isLockedByPlayerLv && (
+                                  <span className="text-[9px] text-amber-300 font-bold ml-1">
+                                    (Sale en Nv.{def.minPlayerLevel} o con Oro)
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Botón de subir nivel hasta 10 */}
+                          {isMaxed ? (
+                            <div className="px-2.5 py-2 rounded-xl bg-gradient-to-b from-amber-400 to-red-600 text-white font-survivor text-[11px] border-2 border-black text-center shrink-0">
+                              <div>★ NV.10</div>
+                              <div className="text-[9px]">MÁXIMO</div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={saveData.gold < goldCost}
+                              onClick={() => handleDirectWeaponUpgradeWithGold(wId)}
+                              className={`px-2.5 py-1.5 rounded-xl font-survivor text-xs survivor-btn shrink-0 cursor-pointer ${
+                                saveData.gold >= goldCost
+                                  ? 'bg-gradient-to-b from-amber-400 to-orange-500 text-white text-stroke-sm'
+                                  : 'bg-slate-700 text-slate-400 opacity-60 cursor-not-allowed'
+                              }`}
+                            >
+                              <div>{lv === 0 ? 'DESBLOQ.' : `+1 NV (${lv + 1}/10)`}</div>
+                              <div className="text-[10px]">🪙 {goldCost}</div>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Botones para asignar a la ranura correspondiente si ya está desbloqueada (lv > 0) */}
+                        {lv > 0 && (
+                          <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-slate-700/80">
+                            <span className="text-[10px] font-bold text-slate-300">
+                              {equippedSlot ? (
+                                <span className="text-emerald-400">
+                                  ✓ Equipada en: {SLOT_LABELS[equippedSlot].title}
+                                </span>
+                              ) : (
+                                <span className="text-amber-300">
+                                  En reserva (Elige ranura para equipar):
+                                </span>
+                              )}
+                            </span>
+
+                            <div className="flex items-center gap-1">
+                              {def.category === 'hand' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEquipInSlot(wId, 'leftHand')}
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                      equippedSlot === 'leftHand'
+                                        ? 'bg-emerald-500 text-white'
+                                        : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                    }`}
+                                  >
+                                    🤛 Mano Izq.
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEquipInSlot(wId, 'rightHand')}
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                      equippedSlot === 'rightHand'
+                                        ? 'bg-emerald-500 text-white'
+                                        : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                    }`}
+                                  >
+                                    🤜 Mano Der.
+                                  </button>
+                                </>
+                              )}
+
+                              {def.category === 'shoulder' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEquipInSlot(wId, 'leftShoulder')}
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                      equippedSlot === 'leftShoulder'
+                                        ? 'bg-emerald-500 text-white'
+                                        : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                    }`}
+                                  >
+                                    🚀 Hombro Izq.
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEquipInSlot(wId, 'rightShoulder')}
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                      equippedSlot === 'rightShoulder'
+                                        ? 'bg-emerald-500 text-white'
+                                        : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                    }`}
+                                  >
+                                    ⚡ Hombro Der.
+                                  </button>
+                                </>
+                              )}
+
+                              {def.category === 'helmet' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEquipInSlot(wId, 'helmet')}
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                    equippedSlot === 'helmet'
+                                      ? 'bg-emerald-500 text-white'
+                                      : 'bg-sky-600 hover:bg-sky-500 text-white'
+                                  }`}
+                                >
+                                  {equippedSlot === 'helmet' ? '🪖 Casco Equipado' : '🪖 Equipar Casco'}
+                                </button>
+                              )}
+
+                              {def.category === 'body' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEquipInSlot(wId, 'body')}
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                    equippedSlot === 'body'
+                                      ? 'bg-emerald-500 text-white'
+                                      : 'bg-sky-600 hover:bg-sky-500 text-white'
+                                  }`}
+                                >
+                                  {equippedSlot === 'body' ? '🛡️ Cuerpo Equipado' : '🛡️ Equipar Cuerpo'}
+                                </button>
+                              )}
+
+                              {def.category === 'companion' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEquipInSlot(wId, 'companion1')}
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                      equippedSlot === 'companion1'
+                                        ? 'bg-emerald-500 text-white'
+                                        : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                    }`}
+                                  >
+                                    🤖 Acomp. 1
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEquipInSlot(wId, 'companion2')}
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-survivor border border-black cursor-pointer ${
+                                      equippedSlot === 'companion2'
+                                        ? 'bg-emerald-500 text-white'
+                                        : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                    }`}
+                                  >
+                                    🐾 Acomp. 2
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           </div>
@@ -1144,8 +1599,15 @@ export default function App() {
                               selectedHeroId: hero.id,
                               weapons: {
                                 ...prev.weapons,
-                                [hero.starterWeapon]: Math.max(1, prev.weapons[hero.starterWeapon] || 0),
+                                [hero.starterWeapon]: Math.max(
+                                  1,
+                                  prev.weapons[hero.starterWeapon] || 0
+                                ),
                               },
+                              equippedSlots: equipItemIntoLoadout(
+                                prev.equippedSlots,
+                                hero.starterWeapon
+                              ),
                             }));
                           }}
                           className={`px-3.5 py-2 rounded-xl font-survivor text-xs survivor-btn shrink-0 cursor-pointer ${
@@ -1170,8 +1632,15 @@ export default function App() {
                               unlockedHeroes: [...prev.unlockedHeroes, hero.id],
                               weapons: {
                                 ...prev.weapons,
-                                [hero.starterWeapon]: Math.max(1, prev.weapons[hero.starterWeapon] || 0),
+                                [hero.starterWeapon]: Math.max(
+                                  1,
+                                  prev.weapons[hero.starterWeapon] || 0
+                                ),
                               },
+                              equippedSlots: equipItemIntoLoadout(
+                                prev.equippedSlots,
+                                hero.starterWeapon
+                              ),
                             }));
                           }}
                           className={`px-3.5 py-2 rounded-xl font-survivor text-xs survivor-btn shrink-0 cursor-pointer ${

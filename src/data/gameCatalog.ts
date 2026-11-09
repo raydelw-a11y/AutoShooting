@@ -6,7 +6,13 @@ export type WeaponId =
   | 'brick'
   | 'molotov'
   | 'drone'
-  | 'katana';
+  | 'katana'
+  | 'soccer'
+  | 'drill'
+  | 'rpg'
+  | 'boomerang'
+  | 'durian'
+  | 'laser';
 
 export type PassiveId =
   | 'scroll'
@@ -16,7 +22,11 @@ export type PassiveId =
   | 'fitness_guide'
   | 'gold_guide'
   | 'hi_power_bullet'
-  | 'sneakers';
+  | 'sneakers'
+  | 'ammo_thruster'
+  | 'he_fuel'
+  | 'magnet_core'
+  | 'ronin_armor';
 
 export interface WeaponDefinition {
   id: WeaponId;
@@ -63,7 +73,13 @@ export interface WorldDefinition {
   bgSecondary: string;
   laneLineColor: string;
   accentColor: string;
-  borderFenceStyle: 'wood_highway' | 'steel_military' | 'radioactive_canyon' | 'cyber_grid' | 'volcanic_abyss' | 'astral_gold';
+  borderFenceStyle:
+    | 'wood_highway'
+    | 'steel_military'
+    | 'radioactive_canyon'
+    | 'cyber_grid'
+    | 'volcanic_abyss'
+    | 'astral_gold';
   enemyHpMultiplier: number;
   enemyDamageMultiplier: number;
   xpMultiplier: number;
@@ -133,10 +149,24 @@ export const WEAPONS_CATALOG: Record<WeaponId, WeaponDefinition> = {
     color: '#22c55e',
     evoColor: '#10b981',
     requiredPassive: 'energy_drink',
-    description: 'Aura verde hexagonal que disuelve y daña a todos los enemigos que se acerquen.',
+    description: 'Aura verde octogonal que disuelve y daña a todos los enemigos que se acerquen.',
     evoDescription: 'EVO ★: Aura colosal que incinera, ralentiza y repele a las hordas.',
     baseDamage: 195,
     baseCooldownMs: 380,
+  },
+  drone: {
+    id: 'drone',
+    name: 'Dron Misiles A+B',
+    evoName: 'Destructor Divino',
+    icon: '🛸',
+    evoIcon: '🚀',
+    color: '#a855f7',
+    evoColor: '#ec4899',
+    requiredPassive: 'hi_power_bullet',
+    description: 'Dos drones autónomos que disparan salvas continuas de misiles dirigibles con estela de humo.',
+    evoDescription: 'EVO ★: Enjambre de misiles teledirigidos con cabeza explosiva que persiguen y detonan en área.',
+    baseDamage: 390,
+    baseCooldownMs: 520,
   },
   guardian: {
     id: 'guardian',
@@ -166,6 +196,90 @@ export const WEAPONS_CATALOG: Record<WeaponId, WeaponDefinition> = {
     baseDamage: 680,
     baseCooldownMs: 1350,
   },
+  soccer: {
+    id: 'soccer',
+    name: 'Balón de Fútbol',
+    evoName: 'Balón Cuántico',
+    icon: '⚽',
+    evoIcon: '☄️',
+    color: '#10b981',
+    evoColor: '#06b6d4',
+    requiredPassive: 'sneakers',
+    description: 'Dispara balones veloces que rebotan entre múltiples enemigos y bordes de pantalla.',
+    evoDescription: 'EVO ★: Balones cuánticos supersónicos con estela neón y rebotes explosivos.',
+    baseDamage: 510,
+    baseCooldownMs: 1050,
+  },
+  drill: {
+    id: 'drill',
+    name: 'Taladro Silbante',
+    evoName: 'Flecha Silbante',
+    icon: '🔩',
+    evoIcon: '💘',
+    color: '#facc15',
+    evoColor: '#f43f5e',
+    requiredPassive: 'ammo_thruster',
+    description: 'Taladro perforador que vuela y rebota sin parar por toda la pantalla.',
+    evoDescription: 'EVO ★: La legendaria Flecha Silbante que persigue y atraviesa enemigos a velocidad extrema.',
+    baseDamage: 360,
+    baseCooldownMs: 400,
+  },
+  rpg: {
+    id: 'rpg',
+    name: 'Lanzacohetes RPG',
+    evoName: 'Cañón Tiburón',
+    icon: '🧨',
+    evoIcon: '🦈',
+    color: '#ef4444',
+    evoColor: '#3b82f6',
+    requiredPassive: 'he_fuel',
+    description: 'Dispara cohetes pesados que provocan una gran explosión en área al impactar.',
+    evoDescription: 'EVO ★: Torpedos Tiburón que detonan con ondas expansivas gigantes.',
+    baseDamage: 880,
+    baseCooldownMs: 1550,
+  },
+  boomerang: {
+    id: 'boomerang',
+    name: 'Bumerán Táctico',
+    evoName: 'Dardo Magnético',
+    icon: '🪃',
+    evoIcon: '🧲',
+    color: '#14b8a6',
+    evoColor: '#f97316',
+    requiredPassive: 'magnet_core',
+    description: 'Lanza bumeranes que van y regresan atravesando filas enteras de zombis.',
+    evoDescription: 'EVO ★: Dardos magnéticos bipolares que giran en espiral expansiva de 360°.',
+    baseDamage: 490,
+    baseCooldownMs: 1100,
+  },
+  durian: {
+    id: 'durian',
+    name: 'Durian Espinoso',
+    evoName: 'Caltrops Gigante',
+    icon: '🌵',
+    evoIcon: '☸️',
+    color: '#84cc16',
+    evoColor: '#e11d48',
+    requiredPassive: 'ronin_armor',
+    description: 'Fruta gigante con púas que rueda por la pantalla aplastando todo a su paso.',
+    evoDescription: 'EVO ★: Esfera colosal que lanza espinas perforantes en todas direcciones.',
+    baseDamage: 460,
+    baseCooldownMs: 320,
+  },
+  laser: {
+    id: 'laser',
+    name: 'Lanzador Láser',
+    evoName: 'Matriz de Aniquilación',
+    icon: '🔦',
+    evoIcon: '🔮',
+    color: '#38bdf8',
+    evoColor: '#d946ef',
+    requiredPassive: 'energy_cube',
+    description: 'Haces láser gemelos que barren la pantalla e incineran hordas enteras.',
+    evoDescription: 'EVO ★: Rayos orbitales convergentes que desintegran todo en espiral.',
+    baseDamage: 610,
+    baseCooldownMs: 1400,
+  },
   brick: {
     id: 'brick',
     name: 'Ladrillo Pesado',
@@ -194,20 +308,6 @@ export const WEAPONS_CATALOG: Record<WeaponId, WeaponDefinition> = {
     baseDamage: 240,
     baseCooldownMs: 1650,
   },
-  drone: {
-    id: 'drone',
-    name: 'Dron Destructor A+B',
-    evoName: 'Destructor Divino',
-    icon: '🛸',
-    evoIcon: '🚀',
-    color: '#a855f7',
-    evoColor: '#ec4899',
-    requiredPassive: 'hi_power_bullet',
-    description: 'Dron autónomo que vuela a tu lado disparando salvas de micromisiles.',
-    evoDescription: 'EVO ★: Fusión de drones que bombardea toda la pantalla con misiles guiados.',
-    baseDamage: 350,
-    baseCooldownMs: 920,
-  },
   katana: {
     id: 'katana',
     name: 'Hoja Cortaviento',
@@ -216,7 +316,7 @@ export const WEAPONS_CATALOG: Record<WeaponId, WeaponDefinition> = {
     evoIcon: '🌙',
     color: '#e2e8f0',
     evoColor: '#f43f5e',
-    requiredPassive: 'sneakers',
+    requiredPassive: 'ronin_armor',
     description: 'Desata tajos de energía en abanico que cortan hordas enteras.',
     evoDescription: 'EVO ★: Ondas de corte sangrientas de 360° que regeneran tu vida al impactar.',
     baseDamage: 540,
@@ -243,14 +343,23 @@ export const PASSIVES_CATALOG: Record<PassiveId, PassiveDefinition> = {
     description: 'Regenera tu barra de vida cada segundo y evoluciona el Campo de Fuerza.',
     statPerLevel: '+1.5% Vida/seg / Nivel',
   },
+  hi_power_bullet: {
+    id: 'hi_power_bullet',
+    name: 'Balas de Alta Potencia',
+    icon: '🎯',
+    color: '#dc2626',
+    pairsWithWeapon: 'drone',
+    description: 'Aumenta el daño de ataque de todas las armas y evoluciona el Dron de Misiles.',
+    statPerLevel: '+20% Daño Total / Nivel',
+  },
   exo_bracer: {
     id: 'exo_bracer',
     name: 'Exoesqueleto',
     icon: '🦾',
     color: '#f59e0b',
     pairsWithWeapon: 'guardian',
-    description: 'Aumenta el tamaño y empuje de tus habilidades. Evoluciona el Guardián.',
-    statPerLevel: '+15% Radio y Empuje / Nivel',
+    description: 'Aumenta la duración y empuje de tus habilidades. Evoluciona el Guardián.',
+    statPerLevel: '+15% Duración y Empuje / Nivel',
   },
   energy_cube: {
     id: 'energy_cube',
@@ -258,8 +367,53 @@ export const PASSIVES_CATALOG: Record<PassiveId, PassiveDefinition> = {
     icon: '🧊',
     color: '#38bdf8',
     pairsWithWeapon: 'lightning',
-    description: 'Disminuye el tiempo de recarga de todas las armas. Evoluciona el Rayo.',
+    description: 'Disminuye el tiempo de recarga de todas las armas. Evoluciona Rayo y Láser.',
     statPerLevel: '-10% Recarga (Cooldown) / Nivel',
+  },
+  sneakers: {
+    id: 'sneakers',
+    name: 'Botas Deportivas',
+    icon: '👟',
+    color: '#10b981',
+    pairsWithWeapon: 'soccer',
+    description: 'Aumenta tu velocidad de movimiento y evoluciona el Balón de Fútbol.',
+    statPerLevel: '+14% Velocidad / Nivel',
+  },
+  ammo_thruster: {
+    id: 'ammo_thruster',
+    name: 'Propulsor de Munición',
+    icon: '🚀',
+    color: '#facc15',
+    pairsWithWeapon: 'drill',
+    description: 'Aumenta la velocidad de vuelo de todos los proyectiles y evoluciona el Taladro.',
+    statPerLevel: '+20% Velocidad Proyectil / Nivel',
+  },
+  he_fuel: {
+    id: 'he_fuel',
+    name: 'Combustible HE',
+    icon: '⛽',
+    color: '#ef4444',
+    pairsWithWeapon: 'rpg',
+    description: 'Aumenta el tamaño y alcance de todos los proyectiles y explosiones. Evoluciona RPG.',
+    statPerLevel: '+18% Radio Explosivo / Nivel',
+  },
+  magnet_core: {
+    id: 'magnet_core',
+    name: 'Imán de Alta Potencia',
+    icon: '🧲',
+    color: '#a855f7',
+    pairsWithWeapon: 'boomerang',
+    description: 'Amplía el radio de absorción de gemas y evoluciona el Bumerán.',
+    statPerLevel: '+40% Radio de Imán / Nivel',
+  },
+  ronin_armor: {
+    id: 'ronin_armor',
+    name: 'Armadura Ronin',
+    icon: '🥋',
+    color: '#64748b',
+    pairsWithWeapon: 'durian',
+    description: 'Reduce todo el daño recibido y evoluciona el Durian Espinoso y la Katana.',
+    statPerLevel: '-12% Daño Recibido / Nivel',
   },
   fitness_guide: {
     id: 'fitness_guide',
@@ -278,24 +432,6 @@ export const PASSIVES_CATALOG: Record<PassiveId, PassiveDefinition> = {
     pairsWithWeapon: 'molotov',
     description: 'Aumenta las monedas obtenidas y evoluciona el Cóctel Molotov.',
     statPerLevel: '+25% Oro Recolectado / Nivel',
-  },
-  hi_power_bullet: {
-    id: 'hi_power_bullet',
-    name: 'Balas de Alta Potencia',
-    icon: '弹',
-    color: '#dc2626',
-    pairsWithWeapon: 'drone',
-    description: 'Aumenta el daño de ataque de todas las armas y evoluciona el Dron.',
-    statPerLevel: '+20% Daño Total / Nivel',
-  },
-  sneakers: {
-    id: 'sneakers',
-    name: 'Botas + Imán',
-    icon: '🧲',
-    color: '#a855f7',
-    pairsWithWeapon: 'katana',
-    description: 'Aumenta tu velocidad de movimiento y el radio de absorción de gemas.',
-    statPerLevel: '+12% Velocidad y +35% Imán / Nivel',
   },
 };
 
@@ -785,7 +921,7 @@ export const HEROES_CATALOG: HeroDefinition[] = [
     scarfColor: '#dc2626',
     suitColor: '#334155',
     starterWeapon: 'kunai',
-    bonusText: 'Empieza con Kunai + Campo de Fuerza Activo · +15% Velocidad de Disparo',
+    bonusText: 'Empieza con Kunai + Campo de Fuerza + Dron Misiles · +15% Cadencia',
     atkMultiplier: 1.15,
     hpMultiplier: 1.0,
     speedMultiplier: 1.05,
@@ -794,11 +930,11 @@ export const HEROES_CATALOG: HeroDefinition[] = [
   {
     id: 'cyber_valkyrie',
     name: 'Valkiria Neón',
-    title: 'Especialista de Tormenta Eléctrica',
+    title: 'Especialista de Drones y Láser',
     visorColor: '#f472b6',
     scarfColor: '#a855f7',
     suitColor: '#1e1b4b',
-    starterWeapon: 'lightning',
+    starterWeapon: 'drone',
     bonusText: '+35% Daño Crítico y +20% Velocidad de Movimiento',
     atkMultiplier: 1.35,
     hpMultiplier: 1.15,
@@ -808,12 +944,12 @@ export const HEROES_CATALOG: HeroDefinition[] = [
   {
     id: 'titan_juggernaut',
     name: 'Titán Blindado Rex',
-    title: 'Coloso de Demolición Pesada',
+    title: 'Coloso de Cohetes RPG y Guardián',
     visorColor: '#facc15',
     scarfColor: '#ea580c',
     suitColor: '#3f6212',
-    starterWeapon: 'guardian',
-    bonusText: '+80% Vida Máxima y +50% Daño de Área',
+    starterWeapon: 'rpg',
+    bonusText: '+80% Vida Máxima y +50% Daño de Explosiones',
     atkMultiplier: 1.5,
     hpMultiplier: 1.8,
     speedMultiplier: 1.1,
@@ -821,7 +957,7 @@ export const HEROES_CATALOG: HeroDefinition[] = [
   },
   {
     id: 'crimson_ronin',
-    name: ' Maestro Ronin Tsukuyomi',
+    name: 'Maestro Ronin Tsukuyomi',
     title: 'Señor de las Cuchillas EVO',
     visorColor: '#f87171',
     scarfColor: '#ef4444',

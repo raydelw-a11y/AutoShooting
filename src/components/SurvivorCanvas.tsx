@@ -1,10 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import {
   HEROES_CATALOG,
-  PASSIVES_CATALOG,
-  PassiveId,
   WEAPONS_CATALOG,
-  WORLDS,
   WeaponId,
   WorldDefinition,
   WorldTeleporter,
@@ -41,6 +38,7 @@ export interface Projectile {
   y: number;
   vx: number;
   vy: number;
+  speed: number;
   radius: number;
   damage: number;
   pierce: number;
@@ -51,6 +49,25 @@ export interface Projectile {
   rotation: number;
   spinSpeed: number;
   hitEnemyIds: Set<number>;
+  // Propiedades avanzadas para Misiles Dirigibles, Balones, Bumerán y Explosivos
+  homing?: boolean;
+  turnRate?: number;
+  targetEnemyId?: number;
+  bouncesLeft?: number;
+  returningToPlayer?: boolean;
+  explosionRadius?: number;
+  trail?: { x: number; y: number }[];
+}
+
+export interface ExplosionRing {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
+  color: string;
+  life: number;
+  maxLife: number;
 }
 
 export interface GroundHazard {
@@ -75,6 +92,8 @@ export interface LightningBolt {
   color: string;
   radius: number;
   isEvo: boolean;
+  isLaserSweep?: boolean;
+  laserOffsetY?: number;
 }
 
 export interface DroppedItem {
@@ -135,7 +154,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Referencias mutables para que el loop a 60fps siempre lea el estado más reciente sin recrearse
   const saveRef = useRef<PersistentSaveData>(saveData);
   saveRef.current = saveData;
 
@@ -162,13 +180,12 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     onActiveBossChange,
   };
 
-  // Estado interno del motor en tiempo real
   const playerRef = useRef({
     x: saveData.playerX || 0,
     y: saveData.playerY || 0,
     hp: 1000,
     maxHp: 1000,
-    facingAngle: -Math.PI / 2, // Mirando hacia arriba al inicio como en la captura
+    facingAngle: -Math.PI / 2,
     facingLeft: false,
     walkCycle: 0,
     invulnTimer: 0,
@@ -190,12 +207,24 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
   const keysRef = useRef<Record<string, boolean>>({});
   const enemiesRef = useRef<ActiveEnemy[]>([]);
   const projectilesRef = useRef<Projectile[]>([]);
+  const explosionsRef = useRef<ExplosionRing[]>([]);
   const hazardsRef = useRef<GroundHazard[]>([]);
   const lightningsRef = useRef<LightningBolt[]>([]);
   const dropsRef = useRef<DroppedItem[]>([]);
   const popupsRef = useRef<DamageNumberPopup[]>([]);
   const ghostsRef = useRef<DeathGhost[]>([]);
   const nextEntityIdRef = useRef<number>(1);
+
+  // Estado persistente de proyectiles continuos (Durian y Taladro Silbante)
+  const durianRef = useRef({
+    x: 90,
+    y: -90,
+    vx: 210,
+    vy: 185,
+    rotation: 0,
+    hitTick: 0,
+  });
+
   const weaponTimersRef = useRef<Record<WeaponId, number>>({
     kunai: 0,
     forcefield: 0,
@@ -205,16 +234,25 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     molotov: 0,
     drone: 0,
     katana: 0,
+    soccer: 0,
+    drill: 0,
+    rpg: 0,
+    boomerang: 0,
+    durian: 0,
+    laser: 0,
   });
 
-  // Inicializa el escenario como en la captura cuando cambia el mundo o arranca
   const populateWorldInitialScene = (world: WorldDefinition, centerX: number, centerY: number) => {
     enemiesRef.current = [];
     projectilesRef.current = [];
+    explosionsRef.current = [];
     hazardsRef.current = [];
     lightningsRef.current = [];
     dropsRef.current = [];
     ghostsRef.current = [];
+
+    durianRef.current.x = centerX + 95;
+    durianRef.current.y = centerY - 95;
 
     // 1. Cofre Arcoíris justo arriba del personaje (igual a la foto subida)
     dropsRef.current.push({
@@ -227,7 +265,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       bobPhase: 0,
     });
 
-    // 2. Segundo Cofre Arcoíris explorando más adelante
     dropsRef.current.push({
       id: nextEntityIdRef.current++,
       type: 'chest_rainbow',
@@ -238,7 +275,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       bobPhase: 1.5,
     });
 
-    // 3. Gemas verdes de XP esparcidas alrededor del héroe exactamente como en la captura
+    // 2. Gemas verdes de XP esparcidas alrededor del héroe exactamente como en la captura
     const gemOffsets = [
       [-105, -75],
       [-58, -88],
@@ -273,7 +310,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       });
     }
 
-    // 4. Imán y Carne de curación cercanos en el mundo abierto
     dropsRef.current.push({
       id: nextEntityIdRef.current++,
       type: 'magnet',
@@ -293,7 +329,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       bobPhase: 0.7,
     });
 
-    // 5. Soldados Zombi iniciales abajo como en la captura (y alrededor)
+    // 3. Soldados Zombi iniciales abajo como en la captura (y alrededor)
     const initialEnemyPositions = [
       [-20, 355],
       [-48, 395],
@@ -330,7 +366,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       });
     });
 
-    // 6. Popup inicial "1310" de impacto de Kunai como guiño visual a la captura
     popupsRef.current.push({
       id: nextEntityIdRef.current++,
       x: centerX - 74,
@@ -344,7 +379,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     });
   };
 
-  // Detecta cambio de mundo (por teletransportador o menú)
   useEffect(() => {
     if (prevWorldIdRef.current !== currentWorld.id) {
       prevWorldIdRef.current = currentWorld.id;
@@ -360,7 +394,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     }
   }, [currentWorld]);
 
-  // Invocar Jefe de Mundo bajo demanda (botón "¡Jefe!" o evento)
   useEffect(() => {
     if (spawnBossSignal <= 0) return;
     const world = worldRef.current;
@@ -391,17 +424,14 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     soundEngine.playBossWarning();
   }, [spawnBossSignal]);
 
-  // Loop principal del juego y controles táctiles/teclado
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Inicializar escena en el primer montaje
     populateWorldInitialScene(worldRef.current, playerRef.current.x, playerRef.current.y);
 
-    // Teclado para pruebas en ordenador
     const handleKeyDown = (e: KeyboardEvent) => {
       keysRef.current[e.key.toLowerCase()] = true;
     };
@@ -419,7 +449,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     let guardianAngle = 0;
     let droneAngle = 0;
 
-    // Helper para calcular estadísticas totales del jugador según Nivel + Pasivas + Tienda + Héroe
     const getPlayerStats = () => {
       const s = saveRef.current;
       const hero = HEROES_CATALOG.find((h) => h.id === s.selectedHeroId) || HEROES_CATALOG[0];
@@ -440,6 +469,10 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const scrollLv = s.passives.scroll || 0;
       const goldLv = s.passives.gold_guide || 0;
       const drinkLv = s.passives.energy_drink || 0;
+      const thrusterLv = s.passives.ammo_thruster || 0;
+      const fuelLv = s.passives.he_fuel || 0;
+      const magnetCoreLv = s.passives.magnet_core || 0;
+      const armorLv = s.passives.ronin_armor || 0;
 
       const levelBonusMult = 1 + (s.level - 1) * 0.12;
       const totalDamageMult =
@@ -447,13 +480,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const maxHp = Math.round(
         1000 * hero.hpMultiplier * hpShopMult * (1 + fitnessLv * 0.25) * (1 + (s.level - 1) * 0.08)
       );
-      const moveSpeed = 165 * hero.speedMultiplier * speedShopMult * (1 + sneakersLv * 0.1);
-      const cooldownMult = Math.max(0.28, Math.pow(0.9, cubeLv) / (1 + (s.permanentUpgrades.speed - 1) * 0.04));
-      const areaMult = 1 + bracerLv * 0.16;
-      const magnetRadius = 92 * magnetShopMult * (1 + sneakersLv * 0.35);
+      const moveSpeed = 165 * hero.speedMultiplier * speedShopMult * (1 + sneakersLv * 0.12);
+      const cooldownMult = Math.max(0.26, Math.pow(0.9, cubeLv) / (1 + (s.permanentUpgrades.speed - 1) * 0.04));
+      const areaMult = 1 + bracerLv * 0.14 + fuelLv * 0.16;
+      const projSpeedMult = 1 + thrusterLv * 0.18;
+      const magnetRadius = 92 * magnetShopMult * (1 + (sneakersLv + magnetCoreLv) * 0.35);
       const xpMult = greedMult * (1 + scrollLv * 0.18);
       const goldMult = greedMult * (1 + goldLv * 0.25);
       const regenPerSec = maxHp * (0.008 + drinkLv * 0.015);
+      const damageReduction = Math.min(0.65, armorLv * 0.1);
 
       return {
         hero,
@@ -462,12 +497,14 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         moveSpeed,
         cooldownMult,
         areaMult,
+        projSpeedMult,
         magnetRadius,
         xpMult,
         goldMult,
         regenPerSec,
         critChance,
         critDamage,
+        damageReduction,
       };
     };
 
@@ -492,7 +529,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
       soundEngine.playHit(isCrit);
 
-      if (popupsRef.current.length < 45) {
+      if (popupsRef.current.length < 50) {
         popupsRef.current.push({
           id: nextEntityIdRef.current++,
           x: enemy.x + (Math.random() - 0.5) * 16,
@@ -504,6 +541,30 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           life: 0.65,
           maxLife: 0.65,
         });
+      }
+    };
+
+    const triggerAreaExplosion = (
+      ex: number,
+      ey: number,
+      blastRadius: number,
+      dmg: number,
+      color: string
+    ) => {
+      explosionsRef.current.push({
+        id: nextEntityIdRef.current++,
+        x: ex,
+        y: ey,
+        radius: 10,
+        maxRadius: blastRadius,
+        color,
+        life: 0.28,
+        maxLife: 0.28,
+      });
+      for (const e of enemiesRef.current) {
+        if (Math.hypot(e.x - ex, e.y - ey) <= blastRadius + e.radius) {
+          damageEnemy(e, dmg, 16);
+        }
       }
     };
 
@@ -519,7 +580,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       if (p.invulnTimer > 0) p.invulnTimer -= dt;
       if (p.portalCooldown > 0) p.portalCooldown -= dt;
 
-      // 1. Movimiento por Joystick Táctil o Teclado WASD/Flechas
+      // 1. Movimiento por Joystick o Teclado
       let moveX = joystickRef.current.dx;
       let moveY = joystickRef.current.dy;
 
@@ -548,14 +609,13 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         p.walkCycle += dt * 12;
       }
 
-      // Sincronizar posición para Auto-Save cada 1.2s
       posSyncAccumulator += dt;
       if (posSyncAccumulator >= 1.2) {
         posSyncAccumulator = 0;
         callbacksRef.current.onPlayerPositionChange(Math.round(p.x), Math.round(p.y));
       }
 
-      // 2. Comprobar cercanía a Teletransportadores del Mundo
+      // 2. Teletransportadores
       let closestTp: WorldTeleporter | null = null;
       for (const tp of world.teleporters) {
         const dist = Math.hypot(p.x - tp.x, p.y - tp.y);
@@ -579,15 +639,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         p.portalCharge = Math.max(0, p.portalCharge - dt * 2);
       }
 
-      // 3. Generación continua de Hordas, Élites y Cofres en el Mundo Abierto
+      // 3. Generación continua de Hordas y Cofres
       spawnAccumulator += dt;
-      const maxEnemies = 65;
-      if (spawnAccumulator >= 0.55 && enemiesRef.current.length < maxEnemies) {
+      const maxEnemies = 68;
+      if (spawnAccumulator >= 0.52 && enemiesRef.current.length < maxEnemies) {
         spawnAccumulator = 0;
         const spawnCount = Math.min(4, maxEnemies - enemiesRef.current.length);
         for (let i = 0; i < spawnCount; i++) {
           const angle = Math.random() * Math.PI * 2;
-          const spawnRadius = Math.max(viewW, viewH) * 0.58 + Math.random() * 110;
+          const spawnRadius = Math.max(viewW, viewH) * 0.56 + Math.random() * 100;
           const sx = p.x + Math.cos(angle) * spawnRadius;
           const sy = p.y + Math.sin(angle) * spawnRadius;
 
@@ -626,7 +686,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // Spawner periódico de Cofres Arcoíris e ítems tácticos cercanos
       chestSpawnAccumulator += dt;
       if (chestSpawnAccumulator >= 22) {
         chestSpawnAccumulator = 0;
@@ -645,10 +704,9 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4. Disparo Automático de todas las Armas Desbloqueadas y EVOs
+      // 4. SISTEMA DE 14 ARMAS ACTIVAS + EVOLUCIONES EVO
       const weapons = save.weapons;
 
-      // Buscar enemigo más cercano para auto-apuntado
       let nearestEnemy: ActiveEnemy | null = null;
       let nearestDist = Infinity;
       for (const e of enemiesRef.current) {
@@ -659,7 +717,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4A. KUNAI / SHURIKEN FANTASMA (EVO)
+      // 4.1 KUNAI NINJA ➔ SHURIKEN FANTASMA (EVO)
       const kunaiLv = weapons.kunai || 0;
       if (kunaiLv > 0) {
         const isEvo = kunaiLv >= 6;
@@ -667,11 +725,12 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         const cd =
           (isEvo ? 0.16 : Math.max(0.24, 0.62 - (kunaiLv - 1) * 0.08)) * stats.cooldownMult;
         weaponTimersRef.current.kunai -= dt;
-        if (weaponTimersRef.current.kunai <= 0 && nearestEnemy && nearestDist < 540) {
+        if (weaponTimersRef.current.kunai <= 0 && nearestEnemy && nearestDist < 550) {
           weaponTimersRef.current.kunai = cd;
           const baseAngle = Math.atan2(nearestEnemy.y - p.y, nearestEnemy.x - p.x);
-          p.facingAngle = baseAngle;
-          const count = isEvo ? 2 + Math.min(3, Math.floor(mastery / 2)) : Math.min(3, 1 + Math.floor(kunaiLv / 2));
+          const count = isEvo
+            ? 2 + Math.min(3, Math.floor(mastery / 2))
+            : Math.min(3, 1 + Math.floor(kunaiLv / 2));
           const dmg =
             WEAPONS_CATALOG.kunai.baseDamage *
             stats.totalDamageMult *
@@ -680,7 +739,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           for (let i = 0; i < count; i++) {
             const spread = (i - (count - 1) / 2) * 0.12;
             const ang = baseAngle + spread;
-            const spd = isEvo ? 680 : 540;
+            const spd = (isEvo ? 680 : 540) * stats.projSpeedMult;
             projectilesRef.current.push({
               id: nextEntityIdRef.current++,
               weaponId: 'kunai',
@@ -688,6 +747,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               y: p.y,
               vx: Math.cos(ang) * spd,
               vy: Math.sin(ang) * spd,
+              speed: spd,
               radius: isEvo ? 11 : 8,
               damage: dmg,
               pierce: isEvo ? 3 + mastery : 1,
@@ -704,7 +764,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4B. CAMPO DE FUERZA (El aura verde hexagonal de la captura) / CAMPO DE PRESIÓN (EVO)
+      // 4.2 CAMPO DE FUERZA ➔ CAMPO DE PRESIÓN (EVO)
       const forceLv = weapons.forcefield || 0;
       if (forceLv > 0) {
         const isEvo = forceLv >= 6;
@@ -725,7 +785,66 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4C. GUARDIÁN GIRATORIO / DEFENSOR ETERNO (EVO)
+      // 4.3 DRON MISILES A+B ➔ DESTRUCTOR DIVINO (EVO) - ¡CON MISILES DIRIGIBLES CURVOS Y ESTELA DE HUMO!
+      const droneLv = weapons.drone || 0;
+      if (droneLv > 0) {
+        const isEvo = droneLv >= 6;
+        droneAngle += dt * 2.2;
+        weaponTimersRef.current.drone -= dt;
+        if (weaponTimersRef.current.drone <= 0 && enemiesRef.current.length > 0) {
+          weaponTimersRef.current.drone = (isEvo ? 0.34 : 0.56) * stats.cooldownMult;
+          const missileCount = isEvo ? 6 : Math.min(5, 2 + Math.floor(droneLv / 2));
+          const dmg =
+            WEAPONS_CATALOG.drone.baseDamage *
+            stats.totalDamageMult *
+            (1 + (droneLv - 1) * 0.32);
+
+          for (let i = 0; i < missileCount; i++) {
+            const target =
+              enemiesRef.current[Math.floor(Math.random() * enemiesRef.current.length)];
+            // Posición del Dron A o Dron B desde donde despega el misil
+            const podSide = i % 2 === 0 ? 1 : -1;
+            const droneX = p.x + Math.cos(droneAngle + (podSide > 0 ? 0 : Math.PI)) * 38;
+            const droneY = p.y - 26 + Math.sin(droneAngle + (podSide > 0 ? 0 : Math.PI)) * 16;
+
+            // El misil despega primero abriéndose en abanico curvo y luego se dirige al objetivo
+            const targetAngle = target
+              ? Math.atan2(target.y - droneY, target.x - droneX)
+              : -Math.PI / 2;
+            const launchOffset = podSide * (0.65 + (i % 3) * 0.25);
+            const launchAng = targetAngle + launchOffset;
+            const missileSpd = (isEvo ? 460 : 390) * stats.projSpeedMult;
+
+            projectilesRef.current.push({
+              id: nextEntityIdRef.current++,
+              weaponId: 'drone',
+              x: droneX,
+              y: droneY,
+              vx: Math.cos(launchAng) * missileSpd,
+              vy: Math.sin(launchAng) * missileSpd,
+              speed: missileSpd,
+              radius: isEvo ? 11 : 9,
+              damage: dmg,
+              pierce: 1,
+              life: 2.2,
+              maxLife: 2.2,
+              color: isEvo ? '#ec4899' : '#38bdf8',
+              isEvo,
+              rotation: launchAng,
+              spinSpeed: 0,
+              hitEnemyIds: new Set(),
+              homing: true,
+              turnRate: isEvo ? 9.5 : 7.2,
+              targetEnemyId: target?.id,
+              explosionRadius: isEvo ? 46 * stats.areaMult : 30 * stats.areaMult,
+              trail: [],
+            });
+          }
+          soundEngine.playShoot('drone');
+        }
+      }
+
+      // 4.4 GUARDIÁN GIRATORIO ➔ DEFENSOR ETERNO (EVO)
       const guardianLv = weapons.guardian || 0;
       if (guardianLv > 0) {
         const isEvo = guardianLv >= 6;
@@ -753,7 +872,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4D. EMISOR DE RAYOS / CELDA DE SUPERCARGA (EVO)
+      // 4.5 EMISOR DE RAYOS ➔ CELDA DE SUPERCARGA (EVO)
       const lightningLv = weapons.lightning || 0;
       if (lightningLv > 0 && enemiesRef.current.length > 0) {
         const isEvo = lightningLv >= 6;
@@ -790,7 +909,252 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4E. LADRILLO PESADO / PESA DE 1 TONELADA (EVO)
+      // 4.6 BALÓN DE FÚTBOL ➔ BALÓN CUÁNTICO (EVO) - Rebota entre enemigos y bordes
+      const soccerLv = weapons.soccer || 0;
+      if (soccerLv > 0 && nearestEnemy) {
+        const isEvo = soccerLv >= 6;
+        weaponTimersRef.current.soccer -= dt;
+        if (weaponTimersRef.current.soccer <= 0) {
+          weaponTimersRef.current.soccer = (isEvo ? 0.72 : 1.05) * stats.cooldownMult;
+          const count = isEvo ? 3 : Math.min(2, 1 + Math.floor(soccerLv / 3));
+          const dmg =
+            WEAPONS_CATALOG.soccer.baseDamage *
+            stats.totalDamageMult *
+            (1 + (soccerLv - 1) * 0.34);
+
+          for (let i = 0; i < count; i++) {
+            const ang =
+              Math.atan2(nearestEnemy.y - p.y, nearestEnemy.x - p.x) + (i - 0.5) * 0.35;
+            const spd = (isEvo ? 540 : 440) * stats.projSpeedMult;
+            projectilesRef.current.push({
+              id: nextEntityIdRef.current++,
+              weaponId: 'soccer',
+              x: p.x,
+              y: p.y,
+              vx: Math.cos(ang) * spd,
+              vy: Math.sin(ang) * spd,
+              speed: spd,
+              radius: (isEvo ? 16 : 14) * stats.areaMult,
+              damage: dmg,
+              pierce: 99,
+              life: 3.2,
+              maxLife: 3.2,
+              color: isEvo ? '#06b6d4' : '#ffffff',
+              isEvo,
+              rotation: 0,
+              spinSpeed: 12,
+              hitEnemyIds: new Set(),
+              bouncesLeft: isEvo ? 9 : 4 + soccerLv,
+            });
+          }
+          soundEngine.playShoot('kunai');
+        }
+      }
+
+      // 4.7 TALADRO SILBANTE ➔ FLECHA SILBANTE (EVO)
+      const drillLv = weapons.drill || 0;
+      if (drillLv > 0 && enemiesRef.current.length > 0) {
+        const isEvo = drillLv >= 6;
+        weaponTimersRef.current.drill -= dt;
+        if (weaponTimersRef.current.drill <= 0) {
+          weaponTimersRef.current.drill = (isEvo ? 0.55 : 0.95) * stats.cooldownMult;
+          const dmg =
+            WEAPONS_CATALOG.drill.baseDamage *
+            stats.totalDamageMult *
+            (1 + (drillLv - 1) * 0.34);
+          const ang = Math.random() * Math.PI * 2;
+          const spd = (isEvo ? 660 : 520) * stats.projSpeedMult;
+
+          projectilesRef.current.push({
+            id: nextEntityIdRef.current++,
+            weaponId: 'drill',
+            x: p.x,
+            y: p.y,
+            vx: Math.cos(ang) * spd,
+            vy: Math.sin(ang) * spd,
+            speed: spd,
+            radius: 11,
+            damage: dmg,
+            pierce: 99,
+            life: 2.8,
+            maxLife: 2.8,
+            color: isEvo ? '#f43f5e' : '#facc15',
+            isEvo,
+            rotation: ang,
+            spinSpeed: 0,
+            hitEnemyIds: new Set(),
+            homing: isEvo,
+            turnRate: isEvo ? 8.5 : 0,
+            bouncesLeft: 8,
+            trail: [],
+          });
+        }
+      }
+
+      // 4.8 LANZACOHETES RPG ➔ CAÑÓN TIBURÓN (EVO)
+      const rpgLv = weapons.rpg || 0;
+      if (rpgLv > 0 && nearestEnemy) {
+        const isEvo = rpgLv >= 6;
+        weaponTimersRef.current.rpg -= dt;
+        if (weaponTimersRef.current.rpg <= 0) {
+          weaponTimersRef.current.rpg = (isEvo ? 1.05 : 1.5) * stats.cooldownMult;
+          const count = isEvo ? 2 : 1 + (rpgLv >= 4 ? 1 : 0);
+          const dmg =
+            WEAPONS_CATALOG.rpg.baseDamage *
+            stats.totalDamageMult *
+            (1 + (rpgLv - 1) * 0.38);
+
+          for (let i = 0; i < count; i++) {
+            const ang =
+              Math.atan2(nearestEnemy.y - p.y, nearestEnemy.x - p.x) + (i - (count - 1) / 2) * 0.25;
+            const spd = (isEvo ? 420 : 360) * stats.projSpeedMult;
+            projectilesRef.current.push({
+              id: nextEntityIdRef.current++,
+              weaponId: 'rpg',
+              x: p.x,
+              y: p.y,
+              vx: Math.cos(ang) * spd,
+              vy: Math.sin(ang) * spd,
+              speed: spd,
+              radius: isEvo ? 16 : 13,
+              damage: dmg,
+              pierce: 1,
+              life: 1.8,
+              maxLife: 1.8,
+              color: isEvo ? '#3b82f6' : '#ef4444',
+              isEvo,
+              rotation: ang,
+              spinSpeed: 0,
+              hitEnemyIds: new Set(),
+              explosionRadius: (isEvo ? 110 : 75) * stats.areaMult,
+              trail: [],
+            });
+          }
+          soundEngine.playShoot('brick');
+        }
+      }
+
+      // 4.9 BUMERÁN TÁCTICO ➔ DARDO MAGNÉTICO (EVO)
+      const boomerangLv = weapons.boomerang || 0;
+      if (boomerangLv > 0) {
+        const isEvo = boomerangLv >= 6;
+        weaponTimersRef.current.boomerang -= dt;
+        if (weaponTimersRef.current.boomerang <= 0) {
+          weaponTimersRef.current.boomerang = (isEvo ? 0.85 : 1.15) * stats.cooldownMult;
+          const count = isEvo ? 2 : 1 + (boomerangLv >= 3 ? 1 : 0);
+          const dmg =
+            WEAPONS_CATALOG.boomerang.baseDamage *
+            stats.totalDamageMult *
+            (1 + (boomerangLv - 1) * 0.34);
+          const baseAng = nearestEnemy
+            ? Math.atan2(nearestEnemy.y - p.y, nearestEnemy.x - p.x)
+            : p.facingAngle;
+
+          for (let i = 0; i < count; i++) {
+            const ang = baseAng + i * Math.PI;
+            const spd = 420 * stats.projSpeedMult;
+            projectilesRef.current.push({
+              id: nextEntityIdRef.current++,
+              weaponId: 'boomerang',
+              x: p.x,
+              y: p.y,
+              vx: Math.cos(ang) * spd,
+              vy: Math.sin(ang) * spd,
+              speed: spd,
+              radius: (isEvo ? 20 : 16) * stats.areaMult,
+              damage: dmg,
+              pierce: 99,
+              life: 1.9,
+              maxLife: 1.9,
+              color: isEvo ? '#f97316' : '#14b8a6',
+              isEvo,
+              rotation: 0,
+              spinSpeed: 16,
+              hitEnemyIds: new Set(),
+              returningToPlayer: true,
+            });
+          }
+        }
+      }
+
+      // 4.10 DURIAN ESPINOSO ➔ CALTROPS GIGANTE (EVO)
+      const durianLv = weapons.durian || 0;
+      if (durianLv > 0) {
+        const isEvo = durianLv >= 6;
+        const d = durianRef.current;
+        const durRadius = (isEvo ? 42 : 28 + durianLv * 2) * stats.areaMult;
+        d.x += d.vx * stats.projSpeedMult * dt;
+        d.y += d.vy * stats.projSpeedMult * dt;
+        d.rotation += dt * 4.5;
+
+        const minX = p.x - viewW * 0.44;
+        const maxX = p.x + viewW * 0.44;
+        const minY = p.y - viewH * 0.38;
+        const maxY = p.y + viewH * 0.38;
+        if (d.x < minX) {
+          d.x = minX;
+          d.vx = Math.abs(d.vx);
+        } else if (d.x > maxX) {
+          d.x = maxX;
+          d.vx = -Math.abs(d.vx);
+        }
+        if (d.y < minY) {
+          d.y = minY;
+          d.vy = Math.abs(d.vy);
+        } else if (d.y > maxY) {
+          d.y = maxY;
+          d.vy = -Math.abs(d.vy);
+        }
+
+        d.hitTick -= dt;
+        if (d.hitTick <= 0) {
+          d.hitTick = 0.25;
+          const dmg =
+            WEAPONS_CATALOG.durian.baseDamage *
+            stats.totalDamageMult *
+            (1 + (durianLv - 1) * 0.34);
+          for (const e of enemiesRef.current) {
+            if (Math.hypot(e.x - d.x, e.y - d.y) <= durRadius + e.radius) {
+              damageEnemy(e, dmg, 20);
+            }
+          }
+        }
+      }
+
+      // 4.11 LANZADOR LÁSER ➔ MATRIZ DE ANIQUILACIÓN (EVO)
+      const laserLv = weapons.laser || 0;
+      if (laserLv > 0 && enemiesRef.current.length > 0) {
+        const isEvo = laserLv >= 6;
+        weaponTimersRef.current.laser -= dt;
+        if (weaponTimersRef.current.laser <= 0) {
+          weaponTimersRef.current.laser = (isEvo ? 0.95 : 1.45) * stats.cooldownMult;
+          const dmg =
+            WEAPONS_CATALOG.laser.baseDamage *
+            stats.totalDamageMult *
+            (1 + (laserLv - 1) * 0.36);
+
+          lightningsRef.current.push({
+            id: nextEntityIdRef.current++,
+            x: p.x,
+            y: p.y,
+            life: 0.42,
+            maxLife: 0.42,
+            color: isEvo ? '#d946ef' : '#38bdf8',
+            radius: viewW * 0.46,
+            isEvo,
+            isLaserSweep: true,
+          });
+
+          for (const e of enemiesRef.current) {
+            if (Math.abs(e.y - p.y) < 95 * stats.areaMult && Math.abs(e.x - p.x) < viewW * 0.48) {
+              damageEnemy(e, dmg, 10);
+            }
+          }
+          soundEngine.playShoot('lightning');
+        }
+      }
+
+      // 4.12 LADRILLO PESADO ➔ PESA DE 1 TONELADA (EVO)
       const brickLv = weapons.brick || 0;
       if (brickLv > 0) {
         const isEvo = brickLv >= 6;
@@ -805,13 +1169,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           if (isEvo) {
             for (let i = 0; i < 8; i++) {
               const ang = (i * Math.PI * 2) / 8;
+              const spd = 340 * stats.projSpeedMult;
               projectilesRef.current.push({
                 id: nextEntityIdRef.current++,
                 weaponId: 'brick',
                 x: p.x,
                 y: p.y,
-                vx: Math.cos(ang) * 340,
-                vy: Math.sin(ang) * 340,
+                vx: Math.cos(ang) * spd,
+                vy: Math.sin(ang) * spd,
+                speed: spd,
                 radius: 18 * stats.areaMult,
                 damage: dmg,
                 pierce: 99,
@@ -834,6 +1200,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 y: p.y,
                 vx: (i - (count - 1) / 2) * 55,
                 vy: -360,
+                speed: 360,
                 radius: 14 * stats.areaMult,
                 damage: dmg,
                 pierce: 8,
@@ -851,7 +1218,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4F. CÓCTEL MOLOTOV / BARRIL DE COMBUSTIBLE AZUL (EVO)
+      // 4.13 CÓCTEL MOLOTOV ➔ BARRIL DE COMBUSTIBLE AZUL (EVO)
       const molotovLv = weapons.molotov || 0;
       if (molotovLv > 0) {
         const isEvo = molotovLv >= 6;
@@ -883,50 +1250,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 4G. DRON DESTRUCTOR A+B / DESTRUCTOR DIVINO (EVO)
-      const droneLv = weapons.drone || 0;
-      if (droneLv > 0) {
-        const isEvo = droneLv >= 6;
-        droneAngle += dt * 2.5;
-        weaponTimersRef.current.drone -= dt;
-        if (weaponTimersRef.current.drone <= 0 && enemiesRef.current.length > 0) {
-          weaponTimersRef.current.drone = (isEvo ? 0.32 : 0.65) * stats.cooldownMult;
-          const shots = isEvo ? 3 : 2;
-          const dmg =
-            WEAPONS_CATALOG.drone.baseDamage *
-            stats.totalDamageMult *
-            (1 + (droneLv - 1) * 0.32);
-
-          for (let i = 0; i < shots; i++) {
-            const target =
-              enemiesRef.current[Math.floor(Math.random() * enemiesRef.current.length)];
-            if (!target) continue;
-            const dx = p.x + Math.cos(droneAngle + i * Math.PI) * 38;
-            const dy = p.y - 26 + Math.sin(droneAngle + i * Math.PI) * 20;
-            const ang = Math.atan2(target.y - dy, target.x - dx);
-            projectilesRef.current.push({
-              id: nextEntityIdRef.current++,
-              weaponId: 'drone',
-              x: dx,
-              y: dy,
-              vx: Math.cos(ang) * 520,
-              vy: Math.sin(ang) * 520,
-              radius: isEvo ? 10 : 7,
-              damage: dmg,
-              pierce: isEvo ? 2 : 1,
-              life: 1.1,
-              maxLife: 1.1,
-              color: isEvo ? '#ec4899' : '#c084fc',
-              isEvo,
-              rotation: ang,
-              spinSpeed: 0,
-              hitEnemyIds: new Set(),
-            });
-          }
-        }
-      }
-
-      // 4H. KATANA CORTAVIENTO / ESPADA DEMONÍACA (EVO)
+      // 4.14 HOJA CORTAVIENTO (KATANA) ➔ ESPADA DEMONÍACA (EVO)
       const katanaLv = weapons.katana || 0;
       if (katanaLv > 0) {
         const isEvo = katanaLv >= 6;
@@ -949,6 +1273,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               y: p.y + Math.sin(ang) * 24,
               vx: Math.cos(ang) * 380,
               vy: Math.sin(ang) * 380,
+              speed: 380,
               radius: (isEvo ? 38 : 28) * stats.areaMult,
               damage: dmg,
               pierce: 99,
@@ -968,18 +1293,100 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 5. Actualizar Proyectiles y Colisiones
+      // 5. ACTUALIZAR PROYECTILES (MISILES DIRIGIBLES, REBOTES, BUMERÁN Y EXPLOSIONES)
       for (let i = projectilesRef.current.length - 1; i >= 0; i--) {
         const proj = projectilesRef.current[i];
+
+        // Guardar estela de humo para misiles, RPG y taladro
+        if (proj.trail) {
+          proj.trail.push({ x: proj.x, y: proj.y });
+          if (proj.trail.length > 9) proj.trail.shift();
+        }
+
+        // Guiado inteligente (Homing) para Misiles del Dron y Flecha Silbante EVO
+        if (proj.homing && enemiesRef.current.length > 0) {
+          let target = enemiesRef.current.find((e) => e.id === proj.targetEnemyId);
+          if (!target) {
+            let bestDist = Infinity;
+            for (const e of enemiesRef.current) {
+              const d = Math.hypot(e.x - proj.x, e.y - proj.y);
+              if (d < bestDist) {
+                bestDist = d;
+                target = e;
+              }
+            }
+            if (target) proj.targetEnemyId = target.id;
+          }
+
+          if (target) {
+            const desiredAngle = Math.atan2(target.y - proj.y, target.x - proj.x);
+            let currentAngle = Math.atan2(proj.vy, proj.vx);
+            let diff = desiredAngle - currentAngle;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            const maxTurn = (proj.turnRate || 7) * dt;
+            currentAngle += Math.max(-maxTurn, Math.min(maxTurn, diff));
+            proj.vx = Math.cos(currentAngle) * proj.speed;
+            proj.vy = Math.sin(currentAngle) * proj.speed;
+            proj.rotation = currentAngle;
+          }
+        }
+
+        // Bumerán: después de alejarse 0.55s, acelera de regreso hacia el jugador
+        if (proj.returningToPlayer && proj.maxLife - proj.life > 0.5) {
+          const toPlayerX = p.x - proj.x;
+          const toPlayerY = p.y - proj.y;
+          const dist = Math.hypot(toPlayerX, toPlayerY) || 1;
+          proj.vx += (toPlayerX / dist) * 1150 * dt;
+          proj.vy += (toPlayerY / dist) * 1150 * dt;
+        }
+
         proj.x += proj.vx * dt;
         proj.y += proj.vy * dt;
         if (proj.weaponId === 'brick' && !proj.isEvo) {
-          proj.vy += 680 * dt; // Gravedad de parábola para el ladrillo clásico
+          proj.vy += 680 * dt;
         }
-        proj.rotation += proj.spinSpeed * dt;
+        if (proj.spinSpeed !== 0) {
+          proj.rotation += proj.spinSpeed * dt;
+        }
         proj.life -= dt;
 
+        // Rebote en los bordes de la pantalla para Balón de Fútbol y Taladro
+        if (proj.bouncesLeft && proj.bouncesLeft > 0) {
+          const minX = p.x - viewW * 0.45;
+          const maxX = p.x + viewW * 0.45;
+          const minY = p.y - viewH * 0.4;
+          const maxY = p.y + viewH * 0.4;
+          let bounced = false;
+          if (proj.x < minX) {
+            proj.x = minX;
+            proj.vx = Math.abs(proj.vx);
+            bounced = true;
+          } else if (proj.x > maxX) {
+            proj.x = maxX;
+            proj.vx = -Math.abs(proj.vx);
+            bounced = true;
+          }
+          if (proj.y < minY) {
+            proj.y = minY;
+            proj.vy = Math.abs(proj.vy);
+            bounced = true;
+          } else if (proj.y > maxY) {
+            proj.y = maxY;
+            proj.vy = -Math.abs(proj.vy);
+            bounced = true;
+          }
+          if (bounced) {
+            proj.bouncesLeft -= 1;
+            proj.rotation = Math.atan2(proj.vy, proj.vx);
+            proj.hitEnemyIds.clear();
+          }
+        }
+
         if (proj.life <= 0) {
+          if (proj.explosionRadius) {
+            triggerAreaExplosion(proj.x, proj.y, proj.explosionRadius, proj.damage * 0.65, proj.color);
+          }
           projectilesRef.current.splice(i, 1);
           continue;
         }
@@ -988,7 +1395,27 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           if (proj.hitEnemyIds.has(e.id)) continue;
           if (Math.hypot(e.x - proj.x, e.y - proj.y) <= e.radius + proj.radius) {
             proj.hitEnemyIds.add(e.id);
-            damageEnemy(e, proj.damage, proj.weaponId === 'katana' ? 18 : 7);
+            damageEnemy(e, proj.damage, proj.weaponId === 'katana' ? 18 : 8);
+
+            if (proj.explosionRadius) {
+              triggerAreaExplosion(
+                proj.x,
+                proj.y,
+                proj.explosionRadius,
+                proj.damage * 0.75,
+                proj.color
+              );
+            }
+
+            // Si es Balón de Fútbol, rebota hacia otro enemigo cercano
+            if (proj.weaponId === 'soccer' && proj.bouncesLeft && proj.bouncesLeft > 0) {
+              proj.bouncesLeft -= 1;
+              const bounceAng = Math.random() * Math.PI * 2;
+              proj.vx = Math.cos(bounceAng) * proj.speed;
+              proj.vy = Math.sin(bounceAng) * proj.speed;
+              break;
+            }
+
             proj.pierce -= 1;
             if (proj.pierce <= 0) {
               projectilesRef.current.splice(i, 1);
@@ -998,7 +1425,17 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 6. Actualizar Charcos de Fuego (Molotov) y Rayos
+      // Actualizar Anillos de Explosión
+      for (let i = explosionsRef.current.length - 1; i >= 0; i--) {
+        const exp = explosionsRef.current[i];
+        exp.life -= dt;
+        exp.radius = exp.maxRadius * (1 - exp.life / exp.maxLife);
+        if (exp.life <= 0) {
+          explosionsRef.current.splice(i, 1);
+        }
+      }
+
+      // 6. Actualizar Charcos de Fuego y Rayos
       for (let i = hazardsRef.current.length - 1; i >= 0; i--) {
         const h = hazardsRef.current[i];
         h.life -= dt;
@@ -1024,7 +1461,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 7. Actualizar Enemigos, Muertes, Botín y Jefe Activo
+      // 7. Actualizar Enemigos, Muertes y Botín
       let xpGainedThisFrame = 0;
       let goldGainedThisFrame = 0;
       let killsThisFrame = 0;
@@ -1035,7 +1472,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         const e = enemiesRef.current[i];
         if (e.hitFlash > 0) e.hitFlash -= dt;
 
-        // Comprobar si murió
         if (e.hp <= 0) {
           killsThisFrame += 1;
           ghostsRef.current.push({
@@ -1071,7 +1507,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               });
             }
           } else if (e.isElite) {
-            // Los élites sueltan Cofre Arcoíris o Monedas grandes
             if (Math.random() < 0.55) {
               dropsRef.current.push({
                 id: nextEntityIdRef.current++,
@@ -1093,7 +1528,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               bobPhase: 0,
             });
           } else {
-            // Drop normal: Gema de XP verde/azul + probabilidad de moneda/imán/carne/bomba
             const roll = Math.random();
             if (roll < 0.012) {
               dropsRef.current.push({
@@ -1152,7 +1586,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           continue;
         }
 
-        // Despawn si queda lejísimos (excepto Jefes)
         const dx = p.x - e.x;
         const dy = p.y - e.y;
         const dist = Math.hypot(dx, dy);
@@ -1165,7 +1598,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           currentActiveBoss = { name: e.name, hp: e.hp, maxHp: e.maxHp };
         }
 
-        // Mover hacia el jugador
         if (dist > 1) {
           e.x += (dx / dist) * e.speed * dt;
           e.y += (dy / dist) * e.speed * dt;
@@ -1173,12 +1605,10 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           e.walkCycle += dt * 9;
         }
 
-        // Colisión cuerpo a cuerpo con el héroe
         if (dist < e.radius + 16 && p.invulnTimer <= 0) {
-          p.hp -= e.damage;
+          p.hp -= e.damage * (1 - stats.damageReduction);
           p.invulnTimer = 0.32;
           if (p.hp <= 0) {
-            // En modo persistente no pierdes tu progreso: revives con escudo de emergencia
             p.hp = p.maxHp;
             p.invulnTimer = 2.0;
             soundEngine.playBombExplosion();
@@ -1191,7 +1621,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // Separación suave entre zombis para que formen hordas orgánicas
       const enemyList = enemiesRef.current;
       for (let i = 0; i < enemyList.length; i++) {
         const a = enemyList[i];
@@ -1317,7 +1746,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         );
       }
 
-      // 9. Actualizar Popups de Daño y Fantasmas de muerte
       for (let i = popupsRef.current.length - 1; i >= 0; i--) {
         const pop = popupsRef.current[i];
         pop.y += pop.vy * dt;
@@ -1335,7 +1763,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       }
     };
 
-    // Función de renderizado estilo Survivor.io (idéntica a la captura)
     const renderScene = (viewW: number, viewH: number, nowMs: number) => {
       const p = playerRef.current;
       const world = worldRef.current;
@@ -1345,57 +1772,47 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const camX = p.x - viewW / 2;
       const camY = p.y - viewH / 2;
 
-      // 1. Fondo del Mundo (Asfalto de autopista con flechas blancas, líneas de carril y vallas laterales con cruces abiertos)
       ctx.fillStyle = world.bgPrimary;
       ctx.fillRect(0, 0, viewW, viewH);
 
       ctx.save();
       ctx.translate(-camX, -camY);
 
-      // Dibujar cuadrícula vial infinita estilo Survivor.io
       const tileSize = 260;
       const startTileX = Math.floor(camX / tileSize) - 1;
       const endTileX = Math.ceil((camX + viewW) / tileSize) + 1;
       const startTileY = Math.floor(camY / tileSize) - 1;
       const endTileY = Math.ceil((camY + viewH) / tileSize) + 1;
 
-      // Líneas centrales dobles verticales del puente principal (x = 0) y avenidas cada 700px
       const roadCentersX = [-700, 0, 700];
       for (const rcx of roadCentersX) {
         if (rcx + 240 < camX || rcx - 240 > camX + viewW) continue;
 
-        // Sombra suave de los bordes del tramo
         ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
         ctx.fillRect(rcx - 205, camY - 100, 14, viewH + 200);
         ctx.fillRect(rcx + 191, camY - 100, 14, viewH + 200);
 
-        // Doble línea central continua (exacta a la captura)
         ctx.fillStyle = world.laneLineColor;
         ctx.fillRect(rcx - 9, camY - 100, 6, viewH + 200);
         ctx.fillRect(rcx + 3, camY - 100, 6, viewH + 200);
       }
 
-      // Dibujar marcas de carriles discontinuas y flechas ↓ ↑ como en la captura
       for (let ty = startTileY; ty <= endTileY; ty++) {
         const yPos = ty * tileSize;
 
         for (const rcx of roadCentersX) {
           if (rcx + 240 < camX || rcx - 240 > camX + viewW) continue;
 
-          // Líneas blancas discontinuas a izquierda y derecha
           ctx.fillStyle = world.laneLineColor;
           ctx.fillRect(rcx - 108, yPos + 20, 7, 92);
           ctx.fillRect(rcx + 101, yPos + 20, 7, 92);
 
-          // Flechas pintadas en el asfalto (↓ en carriles izquierdos, ↑ en carriles derechos, igual que la captura)
           const drawRoadArrow = (ax: number, ay: number, pointDown: boolean) => {
             ctx.save();
             ctx.translate(ax, ay);
             if (!pointDown) ctx.scale(1, -1);
             ctx.fillStyle = 'rgba(203, 213, 225, 0.38)';
-            // Tallo de la flecha
             ctx.fillRect(-6, -24, 12, 26);
-            // Punta triangular
             ctx.beginPath();
             ctx.moveTo(-17, 0);
             ctx.lineTo(17, 0);
@@ -1410,13 +1827,11 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           drawRoadArrow(rcx + 58, yPos + 175, false);
           drawRoadArrow(rcx + 150, yPos + 175, false);
 
-          // Vallas de madera laterales estilo puente de la captura (dejando pasos abiertos cada 3 bloques para el mundo 360°)
           if (Math.abs(ty % 3) !== 1) {
             const drawWoodenRailSegment = (rx: number, ry: number, isLeft: boolean) => {
               ctx.save();
               const railW = 18;
               const bx = isLeft ? rx - railW : rx;
-              // Fondo madera oscura
               ctx.fillStyle =
                 world.borderFenceStyle === 'wood_highway'
                   ? '#9a5b25'
@@ -1430,7 +1845,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               ctx.fillRect(bx, ry + 8, railW, tileSize - 16);
               ctx.strokeRect(bx, ry + 8, railW, tileSize - 16);
 
-              // Postes transversales cada 42px (igual al borde de la foto)
               for (let py = ry + 18; py < ry + tileSize - 20; py += 42) {
                 ctx.fillStyle =
                   world.borderFenceStyle === 'wood_highway' ? '#c87d32' : '#94a3b8';
@@ -1445,7 +1859,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           }
         }
 
-        // Suelo sutil en las plazas abiertas entre autopistas
         for (let tx = startTileX; tx <= endTileX; tx++) {
           const xPos = tx * tileSize;
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
@@ -1454,13 +1867,12 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 2. Dibujar Portales / Teletransportadores Físicos del Mundo
+      // Portales del Mundo
       for (const tp of world.teleporters) {
         const pulse = Math.sin(nowMs * 0.005) * 6;
         ctx.save();
         ctx.translate(tp.x, tp.y);
 
-        // Resplandor exterior
         const grad = ctx.createRadialGradient(0, 0, 12, 0, 0, 68 + pulse);
         grad.addColorStop(0, tp.color);
         grad.addColorStop(0.55, `${tp.color}66`);
@@ -1470,7 +1882,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.arc(0, 0, 68 + pulse, 0, Math.PI * 2);
         ctx.fill();
 
-        // Anillo tecnológico con borde negro cartoon
         ctx.lineWidth = 5;
         ctx.strokeStyle = '#000000';
         ctx.beginPath();
@@ -1483,7 +1894,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.arc(0, 0, 40, nowMs * 0.003, nowMs * 0.003 + Math.PI * 1.4);
         ctx.stroke();
 
-        // Etiqueta flotante del Portal
         ctx.font = '900 12px "Fredoka", "Inter", sans-serif';
         ctx.textAlign = 'center';
         ctx.lineWidth = 4;
@@ -1497,7 +1907,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.fillStyle = '#ffffff';
         ctx.fillText(tp.label, 0, 62);
 
-        // Si el jugador está cargando el teletransportador, dibujar anillo de progreso
         if (Math.hypot(p.x - tp.x, p.y - tp.y) < 78 && p.portalCharge > 0) {
           const progress = Math.min(1, p.portalCharge / 1.15);
           ctx.lineWidth = 6;
@@ -1510,7 +1919,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       }
 
-      // 3. Dibujar Charcos de Fuego (Molotov)
+      // Charcos de Fuego (Molotov)
       for (const h of hazardsRef.current) {
         ctx.save();
         ctx.globalAlpha = Math.min(0.75, h.life / 0.6);
@@ -1525,7 +1934,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       }
 
-      // 4. Dibujar el Aura Verde Hexagonal del Campo de Fuerza (Exacta a la captura)
+      // Aura Verde Octogonal del Campo de Fuerza
       const forceLv = save.weapons.forcefield || 0;
       if (forceLv > 0) {
         const isEvo = forceLv >= 6;
@@ -1534,7 +1943,13 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.translate(p.x, p.y);
         ctx.rotate(nowMs * 0.0008);
 
-        const drawPolygonRing = (r: number, sides: number, strokeCol: string, fillCol: string, lineW: number) => {
+        const drawPolygonRing = (
+          r: number,
+          sides: number,
+          strokeCol: string,
+          fillCol: string,
+          lineW: number
+        ) => {
           ctx.beginPath();
           for (let s = 0; s < sides; s++) {
             const ang = (s * Math.PI * 2) / sides;
@@ -1551,7 +1966,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           ctx.stroke();
         };
 
-        // Anillo exterior e interior verdes translúcidos como en la captura
         drawPolygonRing(
           auraRadius,
           8,
@@ -1569,13 +1983,12 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       }
 
-      // 5. Dibujar Gemas de XP, Monedas, Imanes y el COFRE CON ESTELA ARCOÍRIS (Idéntico a la captura)
+      // Gemas, Monedas, Imanes y COFRE CON ARCOÍRIS
       for (const item of dropsRef.current) {
         if (item.type === 'chest_rainbow') {
           ctx.save();
           ctx.translate(item.x, item.y);
 
-          // 5A. Estela vertical de arcoíris que sube hacia el cielo (como en la foto)
           const beamHeight = 750;
           const beamWidth = 42;
           const rainbowColors = [
@@ -1597,7 +2010,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             ctx.fillRect(sx, -beamHeight, stripeW + 0.5, beamHeight);
           }
 
-          // 5B. Arcoíris semicircular sobre el cofre (exacto a la foto)
           const arcRadii = [58, 53, 48, 43, 38, 33];
           for (let c = 0; c < arcRadii.length; c++) {
             ctx.beginPath();
@@ -1607,7 +2019,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             ctx.stroke();
           }
 
-          // 5C. Cofre Rojo y Dorado con borde negro grueso
           const bobY = Math.sin(item.bobPhase) * 2.5;
           ctx.translate(0, bobY);
           ctx.fillStyle = '#dc2626';
@@ -1618,14 +2029,12 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           ctx.fill();
           ctx.stroke();
 
-          // Bordes dorados del cofre
           ctx.fillStyle = '#fbbf24';
           ctx.fillRect(-20, -4, 40, 7);
           ctx.strokeRect(-20, -4, 40, 7);
           ctx.fillRect(-18, -15, 6, 30);
           ctx.fillRect(12, -15, 6, 30);
 
-          // Cerradura central roja/dorada
           ctx.beginPath();
           ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
           ctx.fillStyle = '#fde047';
@@ -1642,7 +2051,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           item.type === 'xp_blue' ||
           item.type === 'xp_gold'
         ) {
-          // Gemas de experiencia en forma de rombo brillante con destello blanco (exactas a la foto)
           ctx.save();
           ctx.translate(item.x, item.y);
           const r = item.type === 'xp_gold' ? 8.5 : item.type === 'xp_blue' ? 7.5 : 6.5;
@@ -1663,7 +2071,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           ctx.strokeStyle = '#14532d';
           ctx.stroke();
 
-          // Brillo interior blanco
           ctx.fillStyle = '#ffffff';
           ctx.beginPath();
           ctx.arc(-1.5, -1.5, 1.8, 0, Math.PI * 2);
@@ -1683,7 +2090,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           ctx.fillRect(-2, -4, 4, 8);
           ctx.restore();
         } else {
-          // Imán, Carne o Bomba
           ctx.save();
           ctx.translate(item.x, item.y + Math.sin(item.bobPhase) * 3);
           ctx.beginPath();
@@ -1710,7 +2116,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 6. Dibujar Fantasmas de disolución de enemigos eliminados (como el de "1310" en la foto)
       for (const g of ghostsRef.current) {
         ctx.save();
         ctx.globalAlpha = g.life / g.maxLife;
@@ -1722,13 +2127,12 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       }
 
-      // 7. Dibujar Soldados Zombi, Élites y Jefes (Con casco verde militar, ojos y rifle como en la foto)
+      // Soldados Zombi, Élites y Jefes
       for (const e of enemiesRef.current) {
         ctx.save();
         const bob = Math.sin(e.walkCycle) * 2;
         ctx.translate(e.x, e.y + bob);
 
-        // Sombra en el suelo
         ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
         ctx.beginPath();
         ctx.ellipse(0, e.radius + 2, e.radius * 0.85, e.radius * 0.35, 0, 0, Math.PI * 2);
@@ -1745,7 +2149,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         const scale = e.radius / 17;
         ctx.scale(e.facingLeft ? -scale : scale, scale);
 
-        // Cuerpo militar verde oliva
         ctx.fillStyle = e.hitFlash > 0 ? '#ffffff' : e.bodyColor;
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 2.6;
@@ -1754,14 +2157,12 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.fill();
         ctx.stroke();
 
-        // Cabeza zombi cuadrada redondeada
         ctx.fillStyle = e.hitFlash > 0 ? '#ffffff' : '#86efac';
         ctx.beginPath();
         ctx.roundRect(-12, -16, 24, 16, 5);
         ctx.fill();
         ctx.stroke();
 
-        // Ojos blancos redondos de zombi (como en la foto)
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
         ctx.arc(2, -9, 3.2, 0, Math.PI * 2);
@@ -1774,7 +2175,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.arc(8.6, -9, 1.2, 0, Math.PI * 2);
         ctx.fill();
 
-        // Casco militar abombado con cinta marrón (idéntico a los soldados de la foto)
         ctx.fillStyle = e.hitFlash > 0 ? '#ffffff' : e.helmetColor;
         ctx.beginPath();
         ctx.arc(0, -14, 13.5, Math.PI, 0);
@@ -1782,12 +2182,10 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.fill();
         ctx.stroke();
 
-        // Cinta marrón del casco
         ctx.fillStyle = '#92400e';
         ctx.fillRect(-13, -16, 26, 3.5);
         ctx.strokeRect(-13, -16, 26, 3.5);
 
-        // Rifle / Metralleta gris en las manos
         ctx.fillStyle = e.gunColor;
         ctx.fillRect(-2, 3, 18, 5);
         ctx.strokeRect(-2, 3, 18, 5);
@@ -1796,7 +2194,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
         ctx.restore();
 
-        // Barra de vida para Élites y Jefes
         if ((e.isElite || e.isBoss) && e.hp < e.maxHp) {
           const bw = e.radius * 2.2;
           ctx.fillStyle = '#000000';
@@ -1811,7 +2208,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 8. Dibujar Discos del Guardián Giratorio alrededor del Héroe
+      // Discos del Guardián Giratorio
       const guardianLv = save.weapons.guardian || 0;
       if (guardianLv > 0) {
         const isEvo = guardianLv >= 6;
@@ -1839,11 +2236,36 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         }
       }
 
-      // 9. Dibujar al Héroe Principal en el centro (Exacto al de la foto: visor celeste, bufanda roja, kunai en mano y barra de vida verde debajo)
+      // Dibujar Durian Espinoso si está activo
+      const durianLv = save.weapons.durian || 0;
+      if (durianLv > 0) {
+        const isEvo = durianLv >= 6;
+        const d = durianRef.current;
+        const durRadius = (isEvo ? 40 : 28 + durianLv * 2) * stats.areaMult;
+        ctx.save();
+        ctx.translate(d.x, d.y);
+        ctx.rotate(d.rotation);
+        ctx.fillStyle = isEvo ? '#e11d48' : '#84cc16';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        const spikes = 12;
+        for (let s = 0; s < spikes * 2; s++) {
+          const r = s % 2 === 0 ? durRadius + 7 : durRadius - 4;
+          const a = (s * Math.PI) / spikes;
+          if (s === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+          else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Dibujar al Héroe + Drones Gemelos A y B
       ctx.save();
       ctx.translate(p.x, p.y);
 
-      // Flecha blanca/verde de dirección encima de la cabeza (exacta a la captura)
       ctx.save();
       ctx.translate(0, -30);
       ctx.fillStyle = '#dcfce7';
@@ -1858,7 +2280,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       ctx.stroke();
       ctx.restore();
 
-      // Sombra del héroe
       ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
       ctx.beginPath();
       ctx.ellipse(0, 17, 15, 6, 0, 0, Math.PI * 2);
@@ -1869,7 +2290,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       ctx.translate(0, heroBob);
       if (p.facingLeft) ctx.scale(-1, 1);
 
-      // Capa / Bufanda roja ondeando
       ctx.fillStyle = stats.hero.scarfColor;
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 2.8;
@@ -1878,26 +2298,22 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       ctx.fill();
       ctx.stroke();
 
-      // Cabeza / Casco con visor celeste (idéntico al héroe de la foto)
       ctx.fillStyle = '#fed7aa';
       ctx.beginPath();
       ctx.roundRect(-11, -18, 22, 16, 5);
       ctx.fill();
       ctx.stroke();
 
-      // Visor celeste brillante arriba
       ctx.fillStyle = stats.hero.visorColor;
       ctx.beginPath();
       ctx.roundRect(-10, -17, 20, 8, 3);
       ctx.fill();
       ctx.stroke();
 
-      // Bufanda roja cubriendo la parte baja de la cara
       ctx.fillStyle = stats.hero.scarfColor;
       ctx.fillRect(-11, -6, 22, 6);
       ctx.strokeRect(-11, -6, 22, 6);
 
-      // Kunai en la mano derecha apuntando (como en la foto)
       ctx.save();
       ctx.translate(13, 2);
       ctx.rotate(-0.35);
@@ -1914,21 +2330,39 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
       ctx.restore();
 
-      // Dron flotante si está desbloqueado
+      // Dibujar Drones A (Blanco) y B (Negro) o Destructor Divino (EVO)
       if ((save.weapons.drone || 0) > 0) {
         const isEvo = (save.weapons.drone || 0) >= 6;
-        const dx = Math.cos(droneAngle) * 34;
-        const dy = -26 + Math.sin(droneAngle) * 14;
-        ctx.fillStyle = isEvo ? '#ec4899' : '#38bdf8';
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2.2;
-        ctx.beginPath();
-        ctx.arc(dx, dy, 9, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        const drawDroneUnit = (angOffset: number, bodyCol: string, coreCol: string) => {
+          const dx = Math.cos(droneAngle + angOffset) * 38;
+          const dy = -26 + Math.sin(droneAngle + angOffset) * 16;
+          ctx.save();
+          ctx.translate(dx, dy);
+          // Alas de rotor
+          ctx.fillStyle = '#475569';
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 2;
+          ctx.fillRect(-13, -3, 26, 6);
+          ctx.strokeRect(-13, -3, 26, 6);
+          // Cuerpo esférico del Dron
+          ctx.fillStyle = bodyCol;
+          ctx.beginPath();
+          ctx.arc(0, 0, isEvo ? 10 : 8.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          // Ojo / Visor del Dron
+          ctx.fillStyle = coreCol;
+          ctx.beginPath();
+          ctx.arc(0, 0, 3.8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        };
+
+        drawDroneUnit(0, isEvo ? '#f43f5e' : '#f8fafc', '#38bdf8');
+        drawDroneUnit(Math.PI, isEvo ? '#fbbf24' : '#1e293b', '#ec4899');
       }
 
-      // Barra de vida verde justo debajo de los pies del héroe (idéntica a la captura)
+      // Barra de vida verde debajo del héroe
       const hpBarW = 46;
       const hpBarH = 7;
       ctx.fillStyle = '#000000';
@@ -1941,17 +2375,72 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
       ctx.restore();
 
-      // 10. Dibujar Proyectiles (Kunais, Shurikens EVO, Ladrillos, Ondas de Katana)
+      // Dibujar Proyectiles (Misiles Dirigibles con Estela de Humo, Kunais, Balón, Taladro, RPG, Bumerán)
       for (const proj of projectilesRef.current) {
+        // Estela de humo/energía para Misiles Dirigibles, RPG y Taladro
+        if (proj.trail && proj.trail.length > 1) {
+          ctx.save();
+          for (let t = 0; t < proj.trail.length; t++) {
+            const pt = proj.trail[t];
+            const ratio = (t + 1) / proj.trail.length;
+            ctx.fillStyle =
+              proj.weaponId === 'drone'
+                ? proj.isEvo
+                  ? `rgba(244, 63, 94, ${ratio * 0.55})`
+                  : `rgba(226, 232, 240, ${ratio * 0.55})`
+                : proj.weaponId === 'rpg'
+                ? `rgba(251, 146, 60, ${ratio * 0.6})`
+                : `rgba(250, 204, 21, ${ratio * 0.55})`;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, ratio * 5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+
         ctx.save();
         ctx.translate(proj.x, proj.y);
         ctx.rotate(proj.rotation);
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 2.2;
 
-        if (proj.weaponId === 'kunai') {
+        if (proj.weaponId === 'drone' || proj.weaponId === 'rpg') {
+          // MISIL DIRIGIBLE / COHETE RPG (Cuerpo blanco/metálico, ojiva roja/azul, aletas y llama trasera)
+          const scale = proj.weaponId === 'rpg' ? 1.35 : 1.0;
+          ctx.scale(scale, scale);
+
+          // Llama propulsora trasera
+          ctx.fillStyle = '#f97316';
+          ctx.beginPath();
+          ctx.moveTo(-8, -3);
+          ctx.lineTo(-16 - Math.random() * 5, 0);
+          ctx.lineTo(-8, 3);
+          ctx.closePath();
+          ctx.fill();
+
+          // Cuerpo cilíndrico del misil
+          ctx.fillStyle = proj.isEvo ? '#fde047' : '#f8fafc';
+          ctx.beginPath();
+          ctx.roundRect(-8, -4, 14, 8, 2);
+          ctx.fill();
+          ctx.stroke();
+
+          // Ojiva / Punta cónica roja (o azul tiburón en RPG EVO)
+          ctx.fillStyle = proj.isEvo && proj.weaponId === 'rpg' ? '#3b82f6' : '#ef4444';
+          ctx.beginPath();
+          ctx.moveTo(12, 0);
+          ctx.lineTo(5, -4.5);
+          ctx.lineTo(5, 4.5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Aletas traseras
+          ctx.fillStyle = '#475569';
+          ctx.fillRect(-9, -6, 4, 2.5);
+          ctx.fillRect(-9, 3.5, 4, 2.5);
+        } else if (proj.weaponId === 'kunai') {
           if (proj.isEvo) {
-            // Shuriken de 4 puntas carmesí
             ctx.fillStyle = '#ef4444';
             ctx.beginPath();
             for (let s = 0; s < 4; s++) {
@@ -1963,7 +2452,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             ctx.fill();
             ctx.stroke();
           } else {
-            // Kunai ninja clásico (idéntico al que impacta "1310" en la foto)
             ctx.fillStyle = '#e2e8f0';
             ctx.beginPath();
             ctx.moveTo(12, 0);
@@ -1973,13 +2461,44 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             ctx.closePath();
             ctx.fill();
             ctx.stroke();
-            // Anillo en la empuñadura del kunai
             ctx.beginPath();
             ctx.arc(-7, 0, 2.5, 0, Math.PI * 2);
             ctx.stroke();
           }
+        } else if (proj.weaponId === 'soccer') {
+          // Balón de Fútbol / Balón Cuántico
+          ctx.fillStyle = proj.isEvo ? '#06b6d4' : '#ffffff';
+          ctx.beginPath();
+          ctx.arc(0, 0, proj.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#0f172a';
+          ctx.beginPath();
+          ctx.arc(0, 0, proj.radius * 0.42, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (proj.weaponId === 'boomerang') {
+          // Bumerán en V / Dardo Magnético
+          ctx.fillStyle = proj.color;
+          ctx.beginPath();
+          ctx.moveTo(-10, -12);
+          ctx.lineTo(10, 0);
+          ctx.lineTo(-10, 12);
+          ctx.lineTo(-3, 0);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else if (proj.weaponId === 'drill') {
+          // Taladro / Flecha Silbante
+          ctx.fillStyle = proj.color;
+          ctx.beginPath();
+          ctx.moveTo(15, 0);
+          ctx.lineTo(-9, -6);
+          ctx.lineTo(-5, 0);
+          ctx.lineTo(-9, 6);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
         } else if (proj.weaponId === 'katana') {
-          // Onda de corte en medialuna
           ctx.strokeStyle = proj.color;
           ctx.lineWidth = 6;
           ctx.beginPath();
@@ -1995,28 +2514,54 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       }
 
-      // 11. Dibujar Relámpagos del Cielo
-      for (const bolt of lightningsRef.current) {
+      // Dibujar Explosiones de Misiles y RPG
+      for (const exp of explosionsRef.current) {
         ctx.save();
-        ctx.globalAlpha = bolt.life / bolt.maxLife;
-        ctx.strokeStyle = bolt.color;
-        ctx.lineWidth = bolt.isEvo ? 6 : 4;
+        ctx.globalAlpha = exp.life / exp.maxLife;
+        ctx.strokeStyle = exp.color;
+        ctx.lineWidth = 4;
+        ctx.fillStyle = `${exp.color}44`;
         ctx.beginPath();
-        ctx.moveTo(bolt.x - 12, bolt.y - 320);
-        ctx.lineTo(bolt.x + 10, bolt.y - 180);
-        ctx.lineTo(bolt.x - 8, bolt.y - 90);
-        ctx.lineTo(bolt.x, bolt.y);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.arc(bolt.x, bolt.y, bolt.radius * 0.65, 0, Math.PI * 2);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 3;
+        ctx.arc(exp.x, exp.y, exp.radius, 0, Math.PI * 2);
+        ctx.fill();
         ctx.stroke();
         ctx.restore();
       }
 
-      // 12. Dibujar Números de Daño Flotantes ("1310" amarillos/blancos con borde negro grueso igual a la foto)
+      // Dibujar Relámpagos y Barridos Láser
+      for (const bolt of lightningsRef.current) {
+        ctx.save();
+        ctx.globalAlpha = bolt.life / bolt.maxLife;
+        if (bolt.isLaserSweep) {
+          const offset = (1 - bolt.life / bolt.maxLife) * 65;
+          ctx.strokeStyle = bolt.color;
+          ctx.lineWidth = bolt.isEvo ? 8 : 5;
+          ctx.beginPath();
+          ctx.moveTo(bolt.x - bolt.radius, bolt.y - 65 + offset);
+          ctx.lineTo(bolt.x + bolt.radius, bolt.y - 65 + offset);
+          ctx.moveTo(bolt.x - bolt.radius, bolt.y + 65 - offset);
+          ctx.lineTo(bolt.x + bolt.radius, bolt.y + 65 - offset);
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = bolt.color;
+          ctx.lineWidth = bolt.isEvo ? 6 : 4;
+          ctx.beginPath();
+          ctx.moveTo(bolt.x - 12, bolt.y - 320);
+          ctx.lineTo(bolt.x + 10, bolt.y - 180);
+          ctx.lineTo(bolt.x - 8, bolt.y - 90);
+          ctx.lineTo(bolt.x, bolt.y);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(bolt.x, bolt.y, bolt.radius * 0.65, 0, Math.PI * 2);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Números de Daño Flotantes
       for (const pop of popupsRef.current) {
         ctx.save();
         ctx.translate(pop.x, pop.y);
@@ -2033,7 +2578,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
       ctx.restore();
 
-      // 13. Indicadores de borde de pantalla hacia Cofres Arcoíris y Portales cercanos
+      // Indicadores de borde hacia Cofres Arcoíris y Portales
       const drawEdgeIndicator = (
         targetX: number,
         targetY: number,
@@ -2044,7 +2589,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         const dx = targetX - p.x;
         const dy = targetY - p.y;
         const dist = Math.hypot(dx, dy);
-        if (dist < Math.min(viewW, viewH) * 0.42) return; // Ya está visible en pantalla
+        if (dist < Math.min(viewW, viewH) * 0.42) return;
 
         const ang = Math.atan2(dy, dx);
         const pad = 42;
@@ -2080,7 +2625,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         ctx.restore();
       };
 
-      // Mostrar indicador al Cofre Arcoíris más cercano y al Portal más cercano
       const rainbowChest = dropsRef.current.find((d) => d.type === 'chest_rainbow');
       if (rainbowChest) {
         const d = Math.round(Math.hypot(rainbowChest.x - p.x, rainbowChest.y - p.y) / 10);
@@ -2105,7 +2649,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         );
       }
 
-      // 14. Dibujar el Joystick Circular Semitransparente en la parte inferior (IDÉNTICO A LA CAPTURA)
+      // Joystick Circular Semitransparente
       const joy = joystickRef.current;
       const defaultJoyX = viewW / 2;
       const defaultJoyY = viewH * 0.72;
@@ -2117,7 +2661,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const knobY = joy.active ? joy.currentY : defaultJoyY;
 
       ctx.save();
-      // Círculo exterior blanco semitransparente
       ctx.beginPath();
       ctx.arc(jx, jy, outerRadius, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
@@ -2126,7 +2669,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       ctx.strokeStyle = 'rgba(226, 232, 240, 0.65)';
       ctx.stroke();
 
-      // Círculo interior oscuro con borde blanco (igual a la foto)
       ctx.beginPath();
       ctx.arc(knobX, knobY, innerRadius, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(30, 41, 59, 0.85)';
@@ -2143,7 +2685,10 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
-      if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
+      if (
+        canvas.width !== Math.round(rect.width * dpr) ||
+        canvas.height !== Math.round(rect.height * dpr)
+      ) {
         canvas.width = Math.round(rect.width * dpr);
         canvas.height = Math.round(rect.height * dpr);
       }
@@ -2169,7 +2714,6 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     };
   }, []);
 
-  // Manejadores de Pointer Events para el Joystick Táctil en Móvil
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (isPausedRef.current) return;
     const rect = e.currentTarget.getBoundingClientRect();

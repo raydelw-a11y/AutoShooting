@@ -32,7 +32,7 @@ const SAVE_STORAGE_KEY = 'survivor_io_openworld_save_v1';
 
 export function getDefaultSaveData(): PersistentSaveData {
   return {
-    version: 1,
+    version: 2,
     heroName: 'Comandante Koga',
     selectedHeroId: 'survivor_alpha',
     unlockedHeroes: ['survivor_alpha'],
@@ -49,13 +49,14 @@ export function getDefaultSaveData(): PersistentSaveData {
     playerY: 0,
     level: 1,
     xp: 0,
-    gold: 150,
+    gold: 350,
     totalKills: 5,
     bossesDefeated: 0,
     playTimeSeconds: 4,
     weapons: {
       kunai: 1,
       forcefield: 1,
+      drone: 1,
     },
     passives: {
       scroll: 1,
@@ -78,13 +79,18 @@ export function loadSaveData(): PersistentSaveData {
     if (!raw) return getDefaultSaveData();
     const parsed = JSON.parse(raw) as Partial<PersistentSaveData>;
     const def = getDefaultSaveData();
+    const mergedWeapons = {
+      ...def.weapons,
+      ...(parsed.weapons || {}),
+    };
+    if (!mergedWeapons.drone || mergedWeapons.drone < 1) {
+      mergedWeapons.drone = 1;
+    }
     return {
       ...def,
       ...parsed,
-      weapons: {
-        ...def.weapons,
-        ...(parsed.weapons || {}),
-      },
+      version: 2,
+      weapons: mergedWeapons,
       passives: {
         ...def.passives,
         ...(parsed.passives || {}),

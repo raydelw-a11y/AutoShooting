@@ -38,7 +38,7 @@ import { soundEngine } from './utils/soundEngine';
 
 declare const __BUILD_TIMESTAMP__: string | undefined;
 
-const FALLBACK_TIMESTAMP = '07:58 PM - 11/08/2026';
+const FALLBACK_TIMESTAMP = '08:18 PM - 11/08/2026';
 
 interface UpgradeOption {
   kind: 'weapon' | 'passive';
@@ -342,7 +342,8 @@ export default function App() {
   // Mejorar un arma directamente con Oro desde el Arsenal
   const handleDirectWeaponUpgradeWithGold = (wId: WeaponId) => {
     const currentLv = saveData.weapons[wId] || 0;
-    const cost = Math.round(95 * Math.pow(1.45, currentLv));
+    const def = WEAPONS_CATALOG[wId];
+    const cost = currentLv === 0 ? 45 : Math.round(75 * Math.pow(1.38, currentLv));
     if (saveData.gold < cost) return;
     soundEngine.playLevelUp();
     setSaveData((prev) => ({
@@ -351,6 +352,10 @@ export default function App() {
       weapons: {
         ...prev.weapons,
         [wId]: currentLv + 1,
+      },
+      passives: {
+        ...prev.passives,
+        [def.requiredPassive]: Math.max(1, prev.passives[def.requiredPassive] || 0),
       },
     }));
   };
@@ -877,22 +882,35 @@ export default function App() {
         {activeModal === 'pause_arsenal' && (
           <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3">
             <div className="w-full max-w-md max-h-[88dvh] bg-slate-900 border-4 border-black rounded-3xl p-4 shadow-[0_8px_0_#000] flex flex-col">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-3 gap-2">
                 <div>
-                  <h2 className="font-survivor text-2xl text-white text-stroke-md">
-                    🗡️ ARSENAL & EVOLUCIONES EVO
+                  <h2 className="font-survivor text-xl sm:text-2xl text-white text-stroke-md">
+                    🗡️ 14 ARMAS & EVOLUCIONES EVO
                   </h2>
                   <p className="text-xs text-slate-300">
-                    Oro disponible: <span className="text-amber-400 font-bold">{saveData.gold.toLocaleString()}</span> · Puedes mejorar también con Oro
+                    Oro: <span className="text-amber-400 font-bold">🪙 {saveData.gold.toLocaleString()}</span> · Desbloquea o evoluciona cualquier arma
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveModal(null)}
-                  className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white font-survivor text-sm survivor-btn cursor-pointer"
-                >
-                  SEGUIR ▶
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playCoinPickup();
+                      setSaveData((prev) => ({ ...prev, gold: prev.gold + 500 }));
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-amber-500 text-black font-survivor text-xs survivor-btn cursor-pointer"
+                    title="Bono de suministros de oro"
+                  >
+                    +500 🪙
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveModal(null)}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white font-survivor text-sm survivor-btn cursor-pointer"
+                  >
+                    SEGUIR ▶
+                  </button>
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto space-y-2 pr-1">
@@ -902,7 +920,7 @@ export default function App() {
                   const tier = formatWeaponTierLabel(lv);
                   const passiveDef = PASSIVES_CATALOG[def.requiredPassive];
                   const hasPassive = (saveData.passives[def.requiredPassive] || 0) > 0;
-                  const goldCost = Math.round(95 * Math.pow(1.45, lv));
+                  const goldCost = lv === 0 ? 45 : Math.round(75 * Math.pow(1.38, lv));
 
                   return (
                     <div

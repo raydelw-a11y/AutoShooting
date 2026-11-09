@@ -41,7 +41,7 @@ import { soundEngine } from './utils/soundEngine';
 
 declare const __BUILD_TIMESTAMP__: string | undefined;
 
-const FALLBACK_TIMESTAMP = '08:35 PM - 11/08/2026';
+const FALLBACK_TIMESTAMP = '08:49 PM - 11/08/2026';
 
 interface UpgradeOption {
   kind: 'weapon' | 'passive';
@@ -122,7 +122,7 @@ export default function App() {
 
   // 3. Modales y Estado de Interfaz
   const [activeModal, setActiveModal] = useState<
-    null | 'pause_arsenal' | 'level_up' | 'rainbow_chest' | 'portals' | 'shop' | 'heroes'
+    null | 'pause_arsenal' | 'level_up' | 'rainbow_chest' | 'portals' | 'shop' | 'heroes' | 'game_over'
   >(null);
   const [arsenalCategoryFilter, setArsenalCategoryFilter] = useState<'all' | ItemSlotCategory>('all');
   const [pendingLevelUps, setPendingLevelUps] = useState<number>(0);
@@ -138,6 +138,9 @@ export default function App() {
     maxHp: number;
   } | null>(null);
   const [spawnBossSignal, setSpawnBossSignal] = useState<number>(0);
+  const [reviveSignal, setReviveSignal] = useState<number>(0);
+  const [heroHp, setHeroHp] = useState<{ hp: number; maxHp: number }>({ hp: 360, maxHp: 360 });
+  const [deathInfo, setDeathInfo] = useState<{ killedBy: string } | null>(null);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [warpBanner, setWarpBanner] = useState<string | null>(null);
 
@@ -519,6 +522,15 @@ export default function App() {
     }));
   };
 
+  const handleHeroHpChange = useCallback((hp: number, maxHp: number) => {
+    setHeroHp((prev) => (prev.hp === hp && prev.maxHp === maxHp ? prev : { hp, maxHp }));
+  }, []);
+
+  const handleHeroDeath = useCallback((killedByName: string) => {
+    setDeathInfo({ killedBy: killedByName });
+    setActiveModal('game_over');
+  }, []);
+
   const handleLoginSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     sessionStorage.setItem('survivor_auth_ok', 'true');
@@ -610,12 +622,15 @@ export default function App() {
           currentWorld={currentWorld}
           isPaused={activeModal !== null}
           spawnBossSignal={spawnBossSignal}
+          reviveSignal={reviveSignal}
           onGainXpAndCoins={handleGainXpAndCoins}
           onOpenRainbowChest={handleOpenRainbowChest}
           onPlayerPositionChange={handlePlayerPositionChange}
           onEnterTeleporter={handleEnterTeleporter}
           onNearbyTeleporterChange={setNearbyTeleporter}
           onActiveBossChange={setActiveBoss}
+          onHeroHpChange={handleHeroHpChange}
+          onHeroDeath={handleHeroDeath}
         />
 
         {/* ====================================================================
@@ -721,8 +736,17 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Amenaza Enemiga y Coordenadas en el Mundo Abierto */}
+              {/* Vida Actual del Héroe, Amenaza Enemiga y Coordenadas */}
               <div className="flex items-center gap-1 mt-0.5">
+                <div
+                  className={`border border-black px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                    heroHp.hp / Math.max(1, heroHp.maxHp) <= 0.35
+                      ? 'bg-red-600 text-white animate-pulse'
+                      : 'bg-emerald-950/95 text-emerald-300'
+                  }`}
+                >
+                  ❤️ {heroHp.hp}/{heroHp.maxHp}
+                </div>
                 <div className="bg-rose-950/90 border border-black px-2 py-0.5 rounded text-[10px] font-bold text-rose-200">
                   💀 Dureza x
                   {(
@@ -1656,6 +1680,81 @@ export default function App() {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ====================================================================
+            MODAL 7: PANTALLA DE MUERTE DEL HÉROE (GAME OVER)
+           ==================================================================== */}
+        {activeModal === 'game_over' && (
+          <div className="absolute inset-0 z-50 bg-red-950/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="w-full max-w-sm bg-slate-900 border-4 border-black rounded-3xl p-5 shadow-[0_10px_0_#000] text-center">
+              <div className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-b from-red-500 to-rose-800 border-3 border-black shadow-[0_4px_0_#000] flex items-center justify-center text-5xl mb-3 animate-bounce">
+                💀
+              </div>
+              <span className="inline-block px-3 py-0.5 rounded-full bg-red-600 border-2 border-black text-white font-survivor text-xs uppercase tracking-wider">
+                0 HP · Fin de la Partida
+              </span>
+              <h2 className="font-survivor text-3xl text-white text-stroke-md mt-1.5">
+                ¡HAS MUERTO!
+              </h2>
+              <p className="text-xs font-bold text-rose-300 mt-1">
+                Abatido por:{' '}
+                <span className="text-white">{deathInfo?.killedBy || 'Horda Enemiga'}</span>
+              </p>
+
+              <div className="grid grid-cols-3 gap-2 my-4 bg-slate-950/90 border-2 border-black rounded-2xl p-3">
+                <div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase">Nivel</div>
+                  <div className="font-survivor text-lg text-emerald-400">
+                    NV.{saveData.level}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase">Tiempo</div>
+                  <div className="font-survivor text-lg text-white">
+                    {formatTimer(saveData.playTimeSeconds)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase">Bajas</div>
+                  <div className="font-survivor text-lg text-amber-400">
+                    {saveData.totalKills}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playLevelUp();
+                    setPendingLevelUps(0);
+                    setDeathInfo(null);
+                    setSaveData(getDefaultSaveData());
+                    setReviveSignal((s) => s + 1);
+                    setActiveModal(null);
+                  }}
+                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-b from-red-500 to-rose-700 hover:from-red-400 hover:to-rose-600 text-white font-survivor text-lg survivor-btn text-stroke-sm flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <RotateCcw className="w-5 h-5" />
+                  <span>REINICIAR DESDE NIVEL 1</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playLevelUp();
+                    setDeathInfo(null);
+                    setReviveSignal((s) => s + 1);
+                    setActiveModal(null);
+                  }}
+                  className="w-full py-3 px-4 rounded-2xl bg-gradient-to-b from-emerald-400 to-green-600 hover:from-emerald-300 hover:to-green-500 text-white font-survivor text-base survivor-btn text-stroke-sm flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <span>⚡ REVIVIR AQUÍ CON 100% HP</span>
+                </button>
               </div>
             </div>
           </div>

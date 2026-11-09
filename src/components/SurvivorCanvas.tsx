@@ -131,12 +131,15 @@ interface SurvivorCanvasProps {
   currentWorld: WorldDefinition;
   isPaused: boolean;
   spawnBossSignal: number;
+  reviveSignal: number;
   onGainXpAndCoins: (xpDelta: number, goldDelta: number, killsDelta: number, bossesDelta: number) => void;
   onOpenRainbowChest: () => void;
   onPlayerPositionChange: (x: number, y: number) => void;
   onEnterTeleporter: (teleporter: WorldTeleporter) => void;
   onNearbyTeleporterChange: (teleporter: WorldTeleporter | null) => void;
   onActiveBossChange: (boss: { name: string; hp: number; maxHp: number } | null) => void;
+  onHeroHpChange: (hp: number, maxHp: number) => void;
+  onHeroDeath: (killedByName: string) => void;
 }
 
 export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
@@ -144,12 +147,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
   currentWorld,
   isPaused,
   spawnBossSignal,
+  reviveSignal,
   onGainXpAndCoins,
   onOpenRainbowChest,
   onPlayerPositionChange,
   onEnterTeleporter,
   onNearbyTeleporterChange,
   onActiveBossChange,
+  onHeroHpChange,
+  onHeroDeath,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -170,6 +176,8 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     onEnterTeleporter,
     onNearbyTeleporterChange,
     onActiveBossChange,
+    onHeroHpChange,
+    onHeroDeath,
   });
   callbacksRef.current = {
     onGainXpAndCoins,
@@ -178,13 +186,17 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     onEnterTeleporter,
     onNearbyTeleporterChange,
     onActiveBossChange,
+    onHeroHpChange,
+    onHeroDeath,
   };
 
   const playerRef = useRef({
     x: saveData.playerX || 0,
     y: saveData.playerY || 0,
-    hp: 1000,
-    maxHp: 1000,
+    hp: 360,
+    maxHp: 360,
+    isDead: false,
+    hurtFlash: 0,
     facingAngle: -Math.PI / 2,
     facingLeft: false,
     walkCycle: 0,
@@ -347,7 +359,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         hp: baseHp,
         maxHp: baseHp,
         speed: template.speed * initialSpeedMult,
-        damage: 18 * world.enemyDamageMultiplier * initialLevelDmgMult,
+        damage: 42 * world.enemyDamageMultiplier * initialLevelDmgMult,
         helmetColor: template.helmetColor,
         bodyColor: template.bodyColor,
         gunColor: template.gunColor,
@@ -389,6 +401,21 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
   }, [currentWorld]);
 
   useEffect(() => {
+    if (reviveSignal <= 0) return;
+    const p = playerRef.current;
+    p.isDead = false;
+    p.hp = p.maxHp;
+    p.hurtFlash = 0;
+    p.invulnTimer = 2.5;
+    callbacksRef.current.onHeroHpChange(p.hp, p.maxHp);
+    for (const nearE of enemiesRef.current) {
+      if (!nearE.isBoss && Math.hypot(nearE.x - p.x, nearE.y - p.y) < 320) {
+        nearE.hp = 0;
+      }
+    }
+  }, [reviveSignal]);
+
+  useEffect(() => {
     if (spawnBossSignal <= 0) return;
     const world = worldRef.current;
     const p = playerRef.current;
@@ -415,7 +442,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       hp: bossHp,
       maxHp: bossHp,
       speed: 64 * Math.min(1.65, 1 + (lvl - 1) * 0.018),
-      damage: 42 * world.enemyDamageMultiplier * bossLevelDmgMult,
+      damage: 95 * world.enemyDamageMultiplier * bossLevelDmgMult,
       helmetColor: world.bossColor,
       bodyColor: '#fde047',
       gunColor: '#18181b',
@@ -502,7 +529,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         (1 + bulletLv * 0.18 + voidHelmLv * 0.18) *
         levelBonusMult;
       const maxHp = Math.round(
-        1000 *
+        360 *
           hero.hpMultiplier *
           hpShopMult *
           (1 + fitnessLv * 0.2 + commandoHelmLv * 0.2 + roninBodyLv * 0.25) *
@@ -520,7 +547,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         92 * magnetShopMult * (1 + (sneakersLv + magnetCoreLv + neonHelmLv) * 0.35);
       const xpMult = 1 + (s.permanentUpgrades.greed - 1) * 0.08 + (scrollLv + visorLv) * 0.06;
       const goldMult = greedMult * (1 + goldLv * 0.25);
-      const regenPerSec = maxHp * (0.008 + drinkLv * 0.015 + voidHelmLv * 0.004);
+      const regenPerSec = maxHp * (drinkLv * 0.008 + voidHelmLv * 0.003);
       const damageReduction = Math.min(
         0.72,
         armorPassiveLv * 0.08 + commandoHelmLv * 0.03 + roninBodyLv * 0.03 + teslaBodyLv * 0.025
@@ -605,6 +632,8 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       }
     };
 
+    let hpSyncAccumulator = 0;
+
     const updateSimulation = (dt: number, viewW: number, viewH: number) => {
       const p = playerRef.current;
       const world = worldRef.current;
@@ -614,10 +643,23 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const weapons = stats.activeEquipped;
 
       p.maxHp = stats.maxHp;
+      if (p.isDead) {
+        p.hp = 0;
+        return;
+      }
       if (p.hp > p.maxHp) p.hp = p.maxHp;
-      p.hp = Math.min(p.maxHp, p.hp + stats.regenPerSec * dt);
+      if (stats.regenPerSec > 0 && p.hp > 0) {
+        p.hp = Math.min(p.maxHp, p.hp + stats.regenPerSec * dt);
+      }
       if (p.invulnTimer > 0) p.invulnTimer -= dt;
+      if (p.hurtFlash > 0) p.hurtFlash -= dt;
       if (p.portalCooldown > 0) p.portalCooldown -= dt;
+
+      hpSyncAccumulator += dt;
+      if (hpSyncAccumulator >= 0.22) {
+        hpSyncAccumulator = 0;
+        callbacksRef.current.onHeroHpChange(Math.round(p.hp), Math.round(p.maxHp));
+      }
 
       // 1. Movimiento
       let moveX = joystickRef.current.dx;
@@ -721,7 +763,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             hp: champHp,
             maxHp: champHp,
             speed: template.speed * enemySpeedMult * 1.12,
-            damage: 26 * world.enemyDamageMultiplier * enemyLevelDmgMult,
+            damage: 68 * world.enemyDamageMultiplier * enemyLevelDmgMult,
             helmetColor: '#dc2626',
             bodyColor: '#7f1d1d',
             gunColor: '#18181b',
@@ -780,10 +822,10 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               enemySpeedMult *
               (isElite ? 1.08 : 0.92 + Math.random() * 0.18),
             damage:
-              18 *
+              42 *
               world.enemyDamageMultiplier *
               enemyLevelDmgMult *
-              (isElite ? 1.85 : 1),
+              (isElite ? 2.1 : 1),
             helmetColor: isElite ? '#f59e0b' : template.helmetColor,
             bodyColor: template.bodyColor,
             gunColor: template.gunColor,
@@ -1926,18 +1968,34 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
           e.walkCycle += dt * 9;
         }
 
-        if (dist < e.radius + 16 && p.invulnTimer <= 0) {
-          p.hp -= e.damage * (1 - stats.damageReduction);
-          p.invulnTimer = 0.32;
+        if (dist < e.radius + 17 && p.invulnTimer <= 0 && !p.isDead) {
+          const takenDmg = Math.max(1, Math.round(e.damage * (1 - stats.damageReduction)));
+          p.hp = Math.max(0, p.hp - takenDmg);
+          p.invulnTimer = 0.25;
+          p.hurtFlash = 0.25;
+          soundEngine.playHit(true);
+
+          popupsRef.current.push({
+            id: nextEntityIdRef.current++,
+            x: p.x + (Math.random() - 0.5) * 14,
+            y: p.y - 28,
+            vy: -38,
+            text: `-${takenDmg} HP`,
+            color: '#ef4444',
+            scale: 1.15,
+            life: 0.75,
+            maxLife: 0.75,
+          });
+
+          callbacksRef.current.onHeroHpChange(Math.round(p.hp), Math.round(p.maxHp));
+
           if (p.hp <= 0) {
-            p.hp = p.maxHp;
-            p.invulnTimer = 2.0;
+            p.hp = 0;
+            p.isDead = true;
             soundEngine.playBombExplosion();
-            for (const nearE of enemiesRef.current) {
-              if (!nearE.isBoss && Math.hypot(nearE.x - p.x, nearE.y - p.y) < 260) {
-                nearE.hp = 0;
-              }
-            }
+            callbacksRef.current.onHeroHpChange(0, Math.round(p.maxHp));
+            callbacksRef.current.onHeroDeath(e.name);
+            break;
           }
         }
       }
@@ -2607,19 +2665,25 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       ctx.ellipse(0, 17, 15, 6, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      const heroBob = Math.sin(p.walkCycle) * 1.8;
+      const heroBob = p.isDead ? 0 : Math.sin(p.walkCycle) * 1.8;
       ctx.save();
       ctx.translate(0, heroBob);
-      if (p.facingLeft) ctx.scale(-1, 1);
+      if (p.isDead) {
+        ctx.translate(0, 6);
+        ctx.rotate(Math.PI / 2);
+      } else if (p.facingLeft) {
+        ctx.scale(-1, 1);
+      }
 
       const slots = save.equippedSlots;
       const bodyDef = slots.body ? WEAPONS_CATALOG[slots.body] : null;
       const helmetDef = slots.helmet ? WEAPONS_CATALOG[slots.helmet] : null;
+      const isHurt = p.hurtFlash > 0;
 
       // Módulos de Hombro Izquierdo y Hombro Derecho montados sobre los hombros
       if (slots.leftShoulder) {
         const lsDef = WEAPONS_CATALOG[slots.leftShoulder];
-        ctx.fillStyle = lsDef.color;
+        ctx.fillStyle = isHurt ? '#ef4444' : lsDef.color;
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 2.2;
         ctx.fillRect(-16, -12, 8, 10);
@@ -2627,7 +2691,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       }
       if (slots.rightShoulder) {
         const rsDef = WEAPONS_CATALOG[slots.rightShoulder];
-        ctx.fillStyle = rsDef.color;
+        ctx.fillStyle = isHurt ? '#ef4444' : rsDef.color;
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 2.2;
         ctx.fillRect(8, -12, 8, 10);
@@ -2635,7 +2699,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       }
 
       // Armadura de Cuerpo / Capa
-      ctx.fillStyle = bodyDef ? bodyDef.color : stats.hero.scarfColor;
+      ctx.fillStyle = isHurt ? '#ef4444' : bodyDef ? bodyDef.color : stats.hero.scarfColor;
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 2.8;
       ctx.beginPath();
@@ -2644,20 +2708,20 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       ctx.stroke();
 
       // Cabeza
-      ctx.fillStyle = '#fed7aa';
+      ctx.fillStyle = isHurt ? '#fca5a5' : '#fed7aa';
       ctx.beginPath();
       ctx.roundRect(-11, -18, 22, 16, 5);
       ctx.fill();
       ctx.stroke();
 
       // Casco / Visor equipado
-      ctx.fillStyle = helmetDef ? helmetDef.color : stats.hero.visorColor;
+      ctx.fillStyle = isHurt ? '#ffffff' : helmetDef ? helmetDef.color : stats.hero.visorColor;
       ctx.beginPath();
       ctx.roundRect(-10, -17, 20, 8, 3);
       ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = stats.hero.scarfColor;
+      ctx.fillStyle = isHurt ? '#dc2626' : stats.hero.scarfColor;
       ctx.fillRect(-11, -6, 22, 6);
       ctx.strokeRect(-11, -6, 22, 6);
 
@@ -2699,9 +2763,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
       ctx.restore();
 
+      if (p.isDead) {
+        ctx.font = '26px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('💀', 0, -18);
+      }
+
       // Dibujar los 2 Acompañantes activos alrededor del Héroe
       const drawCompanionUnit = (compId: WeaponId | null, sideSign: number) => {
-        if (!compId) return;
+        if (!compId || p.isDead) return;
         const cDef = WEAPONS_CATALOG[compId];
         const lv = weapons[compId] || 1;
         const isEvo = lv >= MAX_ITEM_LEVEL;
@@ -2728,9 +2798,9 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       drawCompanionUnit(save.equippedSlots.companion1, 1);
       drawCompanionUnit(save.equippedSlots.companion2, -1);
 
-      // Barra de vida verde debajo del héroe
-      const hpBarW = 46;
-      const hpBarH = 7;
+      // Barra de vida debajo del héroe con texto numérico de HP
+      const hpBarW = 50;
+      const hpBarH = 8;
       ctx.fillStyle = '#000000';
       ctx.fillRect(-hpBarW / 2 - 2, 22, hpBarW + 4, hpBarH + 4);
       ctx.fillStyle = '#1f2937';
@@ -2738,6 +2808,15 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       const hpPct = Math.max(0, Math.min(1, p.hp / p.maxHp));
       ctx.fillStyle = hpPct > 0.35 ? '#84cc16' : '#ef4444';
       ctx.fillRect(-hpBarW / 2, 24, hpBarW * hpPct, hpBarH);
+
+      ctx.font = '900 9px "Inter", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#000000';
+      const hpLabel = p.isDead ? 'MUERTO (0 HP)' : `${Math.ceil(p.hp)}/${Math.round(p.maxHp)}`;
+      ctx.strokeText(hpLabel, 0, 41);
+      ctx.fillStyle = p.isDead ? '#ef4444' : '#ffffff';
+      ctx.fillText(hpLabel, 0, 41);
 
       ctx.restore();
 

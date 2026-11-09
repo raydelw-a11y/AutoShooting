@@ -159,6 +159,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
   const worldRef = useRef<WorldDefinition>(currentWorld);
   const prevWorldIdRef = useRef<string>(currentWorld.id);
+  const prevLevelRef = useRef<number>(saveData.level);
 
   const isPausedRef = useRef<boolean>(isPaused);
   isPausedRef.current = isPaused;
@@ -340,9 +341,21 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       [-150, -310],
       [140, -320],
     ];
+    const curLvl = Math.max(1, saveRef.current.level);
+    const curWeaponLevels = Object.values(saveRef.current.weapons).map((v) => v || 0);
+    const curEvoCount = curWeaponLevels.filter((v) => v >= 6).length;
+    const curTotalWeapons = curWeaponLevels.reduce((acc, v) => acc + v, 0);
+    const initialLevelHpMult =
+      Math.pow(1.21, Math.min(35, curLvl - 1)) *
+      (1 + (curLvl - 1) * 0.38) *
+      (1 + curEvoCount * 0.42 + Math.max(0, curTotalWeapons - 3) * 0.08);
+    const initialLevelDmgMult =
+      1 + (curLvl - 1) * 0.24 + Math.pow(Math.max(0, curLvl - 1), 1.32) * 0.08;
+    const initialSpeedMult = Math.min(1.85, 1 + (curLvl - 1) * 0.022);
+
     initialEnemyPositions.forEach(([ex, ey], idx) => {
       const template = world.enemyTypes[idx % world.enemyTypes.length];
-      const baseHp = 950 * world.enemyHpMultiplier * template.hpRatio;
+      const baseHp = 950 * world.enemyHpMultiplier * template.hpRatio * initialLevelHpMult;
       enemiesRef.current.push({
         id: nextEntityIdRef.current++,
         x: centerX + ex,
@@ -352,8 +365,8 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         radius: template.radius,
         hp: baseHp,
         maxHp: baseHp,
-        speed: template.speed,
-        damage: 18 * world.enemyDamageMultiplier,
+        speed: template.speed * initialSpeedMult,
+        damage: 18 * world.enemyDamageMultiplier * initialLevelDmgMult,
         helmetColor: template.helmetColor,
         bodyColor: template.bodyColor,
         gunColor: template.gunColor,
@@ -399,7 +412,17 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
     const world = worldRef.current;
     const p = playerRef.current;
     const save = saveRef.current;
-    const bossHp = 18000 * world.enemyHpMultiplier * (1 + save.level * 0.18);
+    const lvl = Math.max(1, save.level);
+    const wLevels = Object.values(save.weapons).map((v) => v || 0);
+    const evoCount = wLevels.filter((v) => v >= 6).length;
+    const totalWPower = wLevels.reduce((acc, v) => acc + v, 0);
+    const bossLevelHpMult =
+      Math.pow(1.21, Math.min(35, lvl - 1)) *
+      (1 + (lvl - 1) * 0.38) *
+      (1 + evoCount * 0.42 + Math.max(0, totalWPower - 3) * 0.08);
+    const bossLevelDmgMult =
+      1 + (lvl - 1) * 0.24 + Math.pow(Math.max(0, lvl - 1), 1.32) * 0.08;
+    const bossHp = 18000 * world.enemyHpMultiplier * bossLevelHpMult;
     enemiesRef.current.push({
       id: nextEntityIdRef.current++,
       x: p.x,
@@ -409,8 +432,8 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
       radius: 38,
       hp: bossHp,
       maxHp: bossHp,
-      speed: 64,
-      damage: 42 * world.enemyDamageMultiplier,
+      speed: 64 * Math.min(1.65, 1 + (lvl - 1) * 0.018),
+      damage: 42 * world.enemyDamageMultiplier * bossLevelDmgMult,
       helmetColor: world.bossColor,
       bodyColor: '#fde047',
       gunColor: '#18181b',
@@ -639,27 +662,95 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
         p.portalCharge = Math.max(0, p.portalCharge - dt * 2);
       }
 
-      // 3. Generación continua de Hordas y Cofres
+      // 3. ESCALADO PROGRESIVO DE DIFICULTAD SEGÚN EL NIVEL Y ARSENAL DEL PERSONAJE
+      const lvl = Math.max(1, save.level);
+      const weaponLevelsList = Object.values(save.weapons).map((v) => v || 0);
+      const evoCount = weaponLevelsList.filter((v) => v >= 6).length;
+      const totalWeaponPower = weaponLevelsList.reduce((acc, v) => acc + v, 0);
+
+      // Multiplicador exponencial + progresivo de dureza enemiga (HP, Daño, Velocidad, Cantidad y Élites)
+      const enemyLevelHpMult =
+        Math.pow(1.21, Math.min(35, lvl - 1)) *
+        (1 + (lvl - 1) * 0.38) *
+        (1 + evoCount * 0.42 + Math.max(0, totalWeaponPower - 3) * 0.08);
+      const enemyLevelDmgMult =
+        1 + (lvl - 1) * 0.24 + Math.pow(Math.max(0, lvl - 1), 1.32) * 0.08;
+      const enemySpeedMult = Math.min(1.85, 1 + (lvl - 1) * 0.022);
+      const eliteChance = Math.min(0.26, 0.055 + (lvl - 1) * 0.008);
+      const maxEnemies = Math.min(125, 56 + (lvl - 1) * 3);
+      const spawnInterval = Math.max(0.22, 0.54 - (lvl - 1) * 0.014);
+
+      // Si el jugador acaba de subir a un nivel múltiplo de 3, lanzar un Escuadrón de Élite / Campeón de Asalto
+      if (lvl > prevLevelRef.current) {
+        const oldLvl = prevLevelRef.current;
+        prevLevelRef.current = lvl;
+
+        // Reforzar también la vida máxima de los enemigos vivos en pantalla para que el nuevo nivel se sienta de inmediato
+        for (const existingE of enemiesRef.current) {
+          existingE.maxHp *= 1.22;
+          existingE.hp *= 1.22;
+          existingE.damage *= 1.15;
+        }
+
+        if (lvl % 3 === 0) {
+          const template =
+            world.enemyTypes[Math.floor(Math.random() * world.enemyTypes.length)];
+          const champHp =
+            3800 * world.enemyHpMultiplier * template.hpRatio * enemyLevelHpMult;
+          const ang = Math.random() * Math.PI * 2;
+          enemiesRef.current.push({
+            id: nextEntityIdRef.current++,
+            x: p.x + Math.cos(ang) * 260,
+            y: p.y + Math.sin(ang) * 260,
+            vx: 0,
+            vy: 0,
+            radius: template.radius * 1.65,
+            hp: champHp,
+            maxHp: champHp,
+            speed: template.speed * enemySpeedMult * 1.12,
+            damage: 26 * world.enemyDamageMultiplier * enemyLevelDmgMult,
+            helmetColor: '#dc2626',
+            bodyColor: '#7f1d1d',
+            gunColor: '#18181b',
+            name: `Campeón Nv.${lvl} ${template.name}`,
+            isElite: true,
+            isBoss: lvl % 6 === 0 && oldLvl !== lvl,
+            hitFlash: 0,
+            facingLeft: false,
+            walkCycle: 0,
+          });
+          popupsRef.current.push({
+            id: nextEntityIdRef.current++,
+            x: p.x,
+            y: p.y - 44,
+            vy: -24,
+            text: `⚠️ ¡AMENAZA NV.${lvl} AUMENTADA!`,
+            color: '#f87171',
+            scale: 1.18,
+            life: 1.3,
+            maxLife: 1.3,
+          });
+        }
+      }
+
       spawnAccumulator += dt;
-      const maxEnemies = 68;
-      if (spawnAccumulator >= 0.52 && enemiesRef.current.length < maxEnemies) {
+      if (spawnAccumulator >= spawnInterval && enemiesRef.current.length < maxEnemies) {
         spawnAccumulator = 0;
-        const spawnCount = Math.min(4, maxEnemies - enemiesRef.current.length);
-        for (let i = 0; i < spawnCount; i++) {
+        const waveSize = Math.min(3 + Math.floor(lvl / 4), maxEnemies - enemiesRef.current.length);
+        for (let i = 0; i < waveSize; i++) {
           const angle = Math.random() * Math.PI * 2;
           const spawnRadius = Math.max(viewW, viewH) * 0.56 + Math.random() * 100;
           const sx = p.x + Math.cos(angle) * spawnRadius;
           const sy = p.y + Math.sin(angle) * spawnRadius;
 
-          const isElite = Math.random() < 0.055;
+          const isElite = Math.random() < eliteChance;
           const template =
             world.enemyTypes[Math.floor(Math.random() * world.enemyTypes.length)];
-          const levelScale = 1 + (save.level - 1) * 0.14;
           const hp =
-            920 *
+            950 *
             world.enemyHpMultiplier *
             template.hpRatio *
-            levelScale *
+            enemyLevelHpMult *
             (isElite ? 4.8 : 1);
 
           enemiesRef.current.push({
@@ -671,12 +762,19 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             radius: isElite ? template.radius * 1.42 : template.radius,
             hp,
             maxHp: hp,
-            speed: template.speed * (isElite ? 1.08 : 0.92 + Math.random() * 0.18),
-            damage: 18 * world.enemyDamageMultiplier * (isElite ? 1.8 : 1),
+            speed:
+              template.speed *
+              enemySpeedMult *
+              (isElite ? 1.08 : 0.92 + Math.random() * 0.18),
+            damage:
+              18 *
+              world.enemyDamageMultiplier *
+              enemyLevelDmgMult *
+              (isElite ? 1.85 : 1),
             helmetColor: isElite ? '#f59e0b' : template.helmetColor,
             bodyColor: template.bodyColor,
             gunColor: template.gunColor,
-            name: isElite ? `Élite ${template.name}` : template.name,
+            name: isElite ? `Élite Nv.${lvl} ${template.name}` : template.name,
             isElite,
             isBoss: false,
             hitFlash: 0,
@@ -1483,6 +1581,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
             radius: e.radius,
           });
 
+          const lootLevelScale = 1 + (lvl - 1) * 0.25;
           if (e.isBoss) {
             bossesDefeatedThisFrame += 1;
             dropsRef.current.push({
@@ -1501,7 +1600,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 type: c % 2 === 0 ? 'coin' : 'xp_gold',
                 x: e.x + Math.cos(ang) * 45,
                 y: e.y + Math.sin(ang) * 45,
-                value: Math.round(65 * world.goldMultiplier),
+                value: Math.round(65 * world.goldMultiplier * lootLevelScale),
                 magnetized: true,
                 bobPhase: c,
               });
@@ -1523,7 +1622,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
               type: 'xp_gold',
               x: e.x + 12,
               y: e.y,
-              value: Math.round(48 * world.xpMultiplier),
+              value: Math.round(48 * world.xpMultiplier * lootLevelScale),
               magnetized: false,
               bobPhase: 0,
             });
@@ -1565,7 +1664,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 type: 'coin',
                 x: e.x,
                 y: e.y,
-                value: Math.max(1, Math.round(6 * world.goldMultiplier)),
+                value: Math.max(1, Math.round(6 * world.goldMultiplier * lootLevelScale)),
                 magnetized: false,
                 bobPhase: 0,
               });
@@ -1575,7 +1674,7 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
                 type: roll < 0.38 ? 'xp_blue' : 'xp_green',
                 x: e.x,
                 y: e.y,
-                value: Math.round((roll < 0.38 ? 28 : 14) * world.xpMultiplier),
+                value: Math.round((roll < 0.38 ? 28 : 14) * world.xpMultiplier * lootLevelScale),
                 magnetized: false,
                 bobPhase: Math.random() * 6,
               });
@@ -2194,16 +2293,17 @@ export const SurvivorCanvas: React.FC<SurvivorCanvasProps> = ({
 
         ctx.restore();
 
-        if ((e.isElite || e.isBoss) && e.hp < e.maxHp) {
-          const bw = e.radius * 2.2;
+        if (e.hp < e.maxHp) {
+          const bw = e.isBoss || e.isElite ? e.radius * 2.2 : e.radius * 1.75;
+          const bh = e.isBoss || e.isElite ? 5 : 3.5;
           ctx.fillStyle = '#000000';
-          ctx.fillRect(e.x - bw / 2 - 1, e.y - e.radius - 14, bw + 2, 7);
-          ctx.fillStyle = e.isBoss ? '#ef4444' : '#f59e0b';
+          ctx.fillRect(e.x - bw / 2 - 1, e.y - e.radius - 13, bw + 2, bh + 2);
+          ctx.fillStyle = e.isBoss ? '#ef4444' : e.isElite ? '#f59e0b' : '#22c55e';
           ctx.fillRect(
             e.x - bw / 2,
-            e.y - e.radius - 13,
+            e.y - e.radius - 12,
             bw * Math.max(0, e.hp / e.maxHp),
-            5
+            bh
           );
         }
       }

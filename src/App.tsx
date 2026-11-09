@@ -38,7 +38,7 @@ import { soundEngine } from './utils/soundEngine';
 
 declare const __BUILD_TIMESTAMP__: string | undefined;
 
-const FALLBACK_TIMESTAMP = '08:18 PM - 11/08/2026';
+const FALLBACK_TIMESTAMP = '08:23 PM - 11/08/2026';
 
 interface UpgradeOption {
   kind: 'weapon' | 'passive';
@@ -583,9 +583,19 @@ export default function App() {
               })}
             </div>
 
-            {/* Coordenadas actuales en el Mundo Abierto */}
-            <div className="bg-slate-950/80 border border-black px-2 py-0.5 rounded text-[10px] font-mono text-slate-200">
-              X:{saveData.playerX} Y:{saveData.playerY}
+            {/* Amenaza Enemiga y Coordenadas en el Mundo Abierto */}
+            <div className="flex items-center gap-1">
+              <div className="bg-rose-950/90 border border-black px-2 py-0.5 rounded text-[10px] font-bold text-rose-200">
+                💀 Dureza x
+                {(
+                  currentWorld.enemyHpMultiplier *
+                  Math.pow(1.21, Math.min(35, saveData.level - 1)) *
+                  (1 + (saveData.level - 1) * 0.38)
+                ).toFixed(1)}
+              </div>
+              <div className="bg-slate-950/80 border border-black px-2 py-0.5 rounded text-[10px] font-mono text-slate-200">
+                X:{saveData.playerX} Y:{saveData.playerY}
+              </div>
             </div>
           </div>
 

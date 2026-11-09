@@ -183,6 +183,14 @@ export function loadSaveData(): PersistentSaveData {
       ...(parsed.equippedSlots || {}),
     };
 
+    // Limpiar cualquier ranura con ID inválido de versiones anteriores
+    (Object.keys(loadout) as EquipSlotKey[]).forEach((slotKey) => {
+      const val = loadout[slotKey];
+      if (val && !WEAPONS_CATALOG[val]) {
+        loadout[slotKey] = null;
+      }
+    });
+
     // Asegurar que los ítems desbloqueados llenen las ranuras vacías válidas
     (Object.keys(clampedWeapons) as WeaponId[]).forEach((wId) => {
       if ((clampedWeapons[wId] || 0) > 0) {

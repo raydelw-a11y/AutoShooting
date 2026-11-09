@@ -6,6 +6,9 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -18,15 +21,91 @@
       href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Lilita+One&family=Inter:wght@500;600;700;800;900&display=swap"
       rel="stylesheet"
     />
-    <script type="module" crossorigin src="./assets/index-H4ta2Lfz.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-BUCstWlN.css">
+    <script type="module" crossorigin src="./assets/app.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/app.css">
   </head>
   <body class="bg-slate-950 text-white overflow-hidden select-none m-0 p-0 touch-none">
-    <div id="root"></div>
+    <div id="root">
+      <div
+        id="boot-loader"
+        style="
+          width: 100vw;
+          height: 100dvh;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background: #020617;
+          color: #f8fafc;
+          font-family: system-ui, -apple-system, sans-serif;
+          text-align: center;
+          padding: 20px;
+        "
+      >
+        <div style="font-size: 42px; margin-bottom: 10px">🗡️</div>
+        <div style="font-weight: 800; font-size: 18px; color: #4ade80">
+          CARGANDO SURVIVOR.IO...
+        </div>
+        <button
+          type="button"
+          onclick="if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>Promise.all(rs.map(r=>r.unregister()))).then(()=>caches.keys()).then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).finally(()=>location.reload());}else{location.reload();}"
+          style="
+            margin-top: 18px;
+            padding: 10px 18px;
+            border-radius: 12px;
+            border: 2px solid #000;
+            background: #22c55e;
+            color: #fff;
+            font-weight: 800;
+            font-size: 13px;
+            cursor: pointer;
+          "
+        >
+          🔄 Si tarda, toca aquí para actualizar caché
+        </button>
+      </div>
+    </div>
     <script>
+      // Auto-recuperación si una caché antigua de Service Worker bloqueó la carga
+      window.__APP_MOUNTED__ = false;
+      setTimeout(function () {
+        if (!window.__APP_MOUNTED__ && document.getElementById('boot-loader')) {
+          if ('serviceWorker' in navigator && !sessionStorage.getItem('sw_healed_v8')) {
+            sessionStorage.setItem('sw_healed_v8', '1');
+            navigator.serviceWorker
+              .getRegistrations()
+              .then(function (regs) {
+                return Promise.all(
+                  regs.map(function (r) {
+                    return r.unregister();
+                  })
+                );
+              })
+              .then(function () {
+                return window.caches ? caches.keys() : [];
+              })
+              .then(function (keys) {
+                return Promise.all(
+                  keys.map(function (k) {
+                    return caches.delete(k);
+                  })
+                );
+              })
+              .finally(function () {
+                window.location.reload();
+              });
+          }
+        }
+      }, 2800);
+
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js').catch(() => {});
+        window.addEventListener('load', function () {
+          navigator.serviceWorker
+            .register('./sw.js', { updateViaCache: 'none' })
+            .then(function (reg) {
+              reg.update().catch(function () {});
+            })
+            .catch(function () {});
         });
       }
     </script>

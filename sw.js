@@ -1,4 +1,4 @@
-const CACHE_NAME = 'survivor-io-openworld-v6';
+const CACHE_NAME = 'survivor-io-openworld-v7';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
